@@ -1,0 +1,29 @@
+{
+  "name": "@kiosco/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx src/db/migrate.ts",
+    "db:seed": "tsx src/db/seed.ts"
+  },
+  "dependencies": {
+    "@kiosco/shared": "workspace:*",
+    "better-sqlite3": "^11.7.0",
+    "drizzle-orm": "^0.45.2",
+    "express": "^4.21.2",
+    "multer": "^2.2.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/express": "^5.0.0",
+    "@types/multer": "^1.4.12",
+    "@types/node": "^22.10.2",
+    "@types/ws": "^8.5.13",
+    "drizzle-kit": "^0.31.10",
+    "tsx": "^4.19.2"
+  }
+}

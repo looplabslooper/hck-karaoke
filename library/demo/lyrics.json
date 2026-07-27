@@ -1,0 +1,27 @@
+{
+  "lines": [
+    {
+      "start": 0.5,
+      "end": 6.0,
+      "words": [
+        { "t": "Esto", "start": 0.5, "end": 1.42 },
+        { "t": "es", "start": 1.42, "end": 2.33 },
+        { "t": "una", "start": 2.33, "end": 3.25 },
+        { "t": "prueba", "start": 3.25, "end": 4.17 },
+        { "t": "de", "start": 4.17, "end": 5.08 },
+        { "t": "karaoke", "start": 5.08, "end": 6.0 }
+      ]
+    },
+    {
+      "start": 6.5,
+      "end": 12.0,
+      "words": [
+        { "t": "que", "start": 6.5, "end": 7.6 },
+        { "t": "sincroniza", "start": 7.6, "end": 8.7 },
+        { "t": "cada", "start": 8.7, "end": 9.8 },
+        { "t": "palabra", "start": 9.8, "end": 10.9 },
+        { "t": "bien", "start": 10.9, "end": 12.0 }
+      ]
+    }
+  ]
+}

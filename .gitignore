@@ -1,0 +1,28 @@
+# dependencias / build
+node_modules/
+dist/
+.turbo/
+*.tsbuildinfo
+
+# entorno
+.env
+.env.local
+
+# contenido pesado / referencia (no se versiona)
+/old/
+library/**/*.mp3
+library/**/*.wav
+library/**/*.opus
+
+# base de datos local (se recrea con migraciones + seed)
+/data/
+
+# entorno Python del pipeline de sincronización (se recrea con `uv sync`)
+pipeline/.venv/
+pipeline/test-*.json
+pipeline/test-*.wav
+pipeline/test-*.txt
+
+# editores / sistema
+.DS_Store
+Thumbs.db
