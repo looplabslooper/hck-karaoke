@@ -39,3 +39,15 @@ export interface LeaderboardEntry {
   totalScore: number
   songsScored: number
 }
+
+/** Lista curada de antemano, para empujar varias canciones a la cola de una vez. */
+export interface Playlist {
+  id: string
+  name: string
+  songCount: number
+}
+
+/** Una playlist con sus canciones resueltas, para la vista de detalle. */
+export interface PlaylistDetail extends Playlist {
+  songs: Song[]
+}

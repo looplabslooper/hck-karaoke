@@ -8,9 +8,11 @@ import type {
   QueueItem,
   QueueStatus,
   LeaderboardEntry,
+  Playlist,
+  PlaylistDetail,
 } from '@kiosco/shared'
 import { db } from './client.js'
-import { songs, settings, queueItems } from './schema.js'
+import { songs, settings, queueItems, playlists, playlistSongs } from './schema.js'
 
 /** Prefijo que distingue un path "importado en el lugar" (carpeta externa del
  * usuario, nunca copiado a library/) de uno normal relativo a library/. Ver
@@ -327,6 +329,118 @@ export function scoreQueueItem(id: string, score: number): boolean {
     .where(and(eq(queueItems.id, id), eq(queueItems.status, 'done')))
     .run()
   return result.changes > 0
+}
+
+// --- playlists ---------------------------------------------------------
+
+export function listPlaylists(): Playlist[] {
+  const rows = db
+    .select({
+      id: playlists.id,
+      name: playlists.name,
+      songCount: sql<number>`(select count(*) from ${playlistSongs} where ${playlistSongs.playlistId} = ${playlists.id})`,
+    })
+    .from(playlists)
+    .orderBy(asc(sql`${playlists.name} COLLATE NOCASE`))
+    .all()
+  return rows.map((r) => ({ id: r.id, name: r.name, songCount: r.songCount }))
+}
+
+export function createPlaylist(name: string): Playlist {
+  const id = crypto.randomUUID()
+  db.insert(playlists).values({ id, name: name.trim(), createdAt: Date.now() }).run()
+  return { id, name: name.trim(), songCount: 0 }
+}
+
+export function renamePlaylist(id: string, name: string): boolean {
+  return db.update(playlists).set({ name: name.trim() }).where(eq(playlists.id, id)).run().changes > 0
+}
+
+export function deletePlaylist(id: string): boolean {
+  db.delete(playlistSongs).where(eq(playlistSongs.playlistId, id)).run()
+  return db.delete(playlists).where(eq(playlists.id, id)).run().changes > 0
+}
+
+/** @returns null si la playlist no existe. */
+export function getPlaylist(id: string): PlaylistDetail | null {
+  const row = db.select().from(playlists).where(eq(playlists.id, id)).get()
+  if (!row) return null
+  const links = db
+    .select()
+    .from(playlistSongs)
+    .where(eq(playlistSongs.playlistId, id))
+    .orderBy(asc(playlistSongs.position))
+    .all()
+  const songRows = links
+    .map((l) => db.select().from(songs).where(eq(songs.id, l.songId)).get())
+    .filter((s): s is typeof songs.$inferSelect => !!s)
+  return { id: row.id, name: row.name, songCount: songRows.length, songs: songRows.map(toWireSong) }
+}
+
+/** Ignora duplicados: agregar dos veces la misma canción no la repite. */
+export function addSongToPlaylist(playlistId: string, songId: string): boolean {
+  if (!db.select().from(playlists).where(eq(playlists.id, playlistId)).get()) return false
+  if (!db.select().from(songs).where(eq(songs.id, songId)).get()) return false
+  const existing = db
+    .select()
+    .from(playlistSongs)
+    .where(and(eq(playlistSongs.playlistId, playlistId), eq(playlistSongs.songId, songId)))
+    .get()
+  if (existing) return true
+  const maxPos = db
+    .select({ max: sql<number>`max(${playlistSongs.position})` })
+    .from(playlistSongs)
+    .where(eq(playlistSongs.playlistId, playlistId))
+    .get()
+  db.insert(playlistSongs)
+    .values({ id: crypto.randomUUID(), playlistId, songId, position: (maxPos?.max ?? -1) + 1 })
+    .run()
+  return true
+}
+
+export function removeSongFromPlaylist(playlistId: string, songId: string): boolean {
+  return (
+    db
+      .delete(playlistSongs)
+      .where(and(eq(playlistSongs.playlistId, playlistId), eq(playlistSongs.songId, songId)))
+      .run().changes > 0
+  )
+}
+
+/**
+ * Empuja toda la playlist al final de la cola en vivo, respetando su orden.
+ * `singer` vacío queda como 'Sin asignar': cargar una lista de 20 temas no
+ * implica saber todavía quién va a cantar cada uno — el operador los asigna
+ * a medida que la gente se anota.
+ * @returns cuántas se encolaron.
+ */
+export function addPlaylistToQueue(playlistId: string, singer: string): number {
+  const detail = getPlaylist(playlistId)
+  if (!detail) return 0
+  const cleanSinger = singer.trim() || 'Sin asignar'
+  const maxPos = db
+    .select({ max: sql<number>`max(${queueItems.position})` })
+    .from(queueItems)
+    .where(eq(queueItems.status, 'queued'))
+    .get()
+  let position = (maxPos?.max ?? -1) + 1
+  const now = Date.now()
+  db.transaction((tx) => {
+    for (const song of detail.songs) {
+      tx.insert(queueItems)
+        .values({
+          id: crypto.randomUUID(),
+          songId: song.id,
+          singer: cleanSinger,
+          status: 'queued',
+          score: null,
+          position: position++,
+          createdAt: now,
+        })
+        .run()
+    }
+  })
+  return detail.songs.length
 }
 
 /** Suma de puntajes por cantante, de mayor a menor — "quién va ganando". */

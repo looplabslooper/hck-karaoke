@@ -1,5 +1,13 @@
 import { useEffect, useRef, useState, type DragEvent, type FormEvent } from 'react'
-import type { LeaderboardEntry, LyricsDoc, QueueItem, ServerMsg, Song } from '@kiosco/shared'
+import type {
+  LeaderboardEntry,
+  LyricsDoc,
+  Playlist,
+  PlaylistDetail,
+  QueueItem,
+  ServerMsg,
+  Song,
+} from '@kiosco/shared'
 import { LyricsView } from './LyricsView'
 import { CdgPlayer } from './CdgPlayer'
 
@@ -56,7 +64,7 @@ function usesWebAudioEngine(song: Song): boolean {
   return song.playbackMode === 'overlay' || song.sourceFormat === 'cdg'
 }
 
-type Page = 'biblioteca' | 'cola' | 'generar' | 'subir' | 'fondo' | 'importar'
+type Page = 'biblioteca' | 'playlists' | 'cola' | 'generar' | 'subir' | 'fondo' | 'importar'
 type WizardStep = 1 | 2 | 3 | 4
 
 interface ImportCandidate {
@@ -77,6 +85,17 @@ const NAV_ITEMS: { id: Page; label: string; icon: JSX.Element }[] = [
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
         <rect x="3" y="4" width="7" height="16" rx="1.5" />
         <rect x="14" y="4" width="7" height="10" rx="1.5" />
+      </svg>
+    ),
+  },
+  {
+    id: 'playlists',
+    label: 'Playlists',
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <path d="M4 6h11M4 11h11M4 16h7" />
+        <circle cx="18" cy="16" r="3" />
+        <path d="M21 16V8l-3 1" />
       </svg>
     ),
   },
@@ -182,6 +201,15 @@ export function App() {
   // Confirmación de borrado
   const [deleteSong, setDeleteSong] = useState<Song | null>(null)
   const [deleting, setDeleting] = useState(false)
+
+  // Playlists
+  const [playlists, setPlaylists] = useState<Playlist[]>([])
+  const [openPlaylist, setOpenPlaylist] = useState<PlaylistDetail | null>(null)
+  const [newPlaylistName, setNewPlaylistName] = useState('')
+  const [addToPlaylistSong, setAddToPlaylistSong] = useState<Song | null>(null)
+  const [pushPlaylist, setPushPlaylist] = useState<Playlist | null>(null)
+  const [pushSinger, setPushSinger] = useState('')
+  const [playlistMessage, setPlaylistMessage] = useState<string | null>(null)
 
   // Cola en vivo + puntajes
   const [queue, setQueue] = useState<QueueItem[]>([])
@@ -302,6 +330,72 @@ export function App() {
     setLeaderboard(await leaderboardRes.json())
   }
 
+  // --- Playlists ----------------------------------------------------------
+
+  async function refreshPlaylists() {
+    const res = await fetch('/api/playlists')
+    setPlaylists(await res.json())
+  }
+
+  async function createPlaylist() {
+    const name = newPlaylistName.trim()
+    if (!name) return
+    await fetch('/api/playlists', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    })
+    setNewPlaylistName('')
+    refreshPlaylists()
+  }
+
+  async function deletePlaylist(id: string) {
+    await fetch(`/api/playlists/${id}`, { method: 'DELETE' })
+    if (openPlaylist?.id === id) setOpenPlaylist(null)
+    refreshPlaylists()
+  }
+
+  async function showPlaylist(id: string) {
+    const res = await fetch(`/api/playlists/${id}`)
+    setOpenPlaylist(res.ok ? await res.json() : null)
+  }
+
+  async function addSongToPlaylist(playlistId: string, songId: string) {
+    await fetch(`/api/playlists/${playlistId}/songs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ songId }),
+    })
+    setAddToPlaylistSong(null)
+    setPlaylistMessage('Canción agregada a la playlist.')
+    refreshPlaylists()
+    if (openPlaylist?.id === playlistId) showPlaylist(playlistId)
+  }
+
+  async function removeSongFromPlaylist(playlistId: string, songId: string) {
+    await fetch(`/api/playlists/${playlistId}/songs/${songId}`, { method: 'DELETE' })
+    refreshPlaylists()
+    showPlaylist(playlistId)
+  }
+
+  async function submitPushPlaylist() {
+    if (!pushPlaylist) return
+    const res = await fetch(`/api/playlists/${pushPlaylist.id}/add-to-queue`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ singer: pushSinger }),
+    })
+    const body = await res.json()
+    setPushPlaylist(null)
+    setPushSinger('')
+    if (res.ok) {
+      setPlaylistMessage(`${body.added} canciones agregadas a la cola.`)
+      refreshQueue()
+    } else {
+      setPlaylistMessage(body.error ?? 'No se pudo agregar a la cola.')
+    }
+  }
+
   async function refreshImportRoots() {
     const res = await fetch('/api/import/roots')
     setImportRootsState(await res.json())
@@ -312,6 +406,7 @@ export function App() {
     // de abajo (corre también al montar) — acá solo lo que no depende de eso.
     refreshQueue()
     refreshImportRoots()
+    refreshPlaylists()
 
     const ws = new WebSocket(`ws://${location.hostname}:8080/ws`)
     wsRef.current = ws
@@ -1120,6 +1215,16 @@ export function App() {
                     <button className="row-queue-btn" onClick={() => openAddToQueue(s)} title="Agregar a la cola">
                       + Cola
                     </button>
+                    <button
+                      className="row-queue-btn"
+                      onClick={() => {
+                        setAddToPlaylistSong(s)
+                        setPlaylistMessage(null)
+                      }}
+                      title="Agregar a una playlist"
+                    >
+                      + Playlist
+                    </button>
                     {s.audioUrl && (
                       <button className="row-resync-btn" onClick={() => openResync(s)} title="Re-sincronizar letra">
                         ⟳
@@ -1142,6 +1247,95 @@ export function App() {
             </button>
           )}
           {playError && <p className="error">{playError}</p>}
+        </section>
+
+        <section className={`page${page === 'playlists' ? ' active' : ''}`}>
+          <div className="stage-head">
+            <div>
+              <h1>Playlists</h1>
+              <p>Listas armadas de antemano. Cargá una entera a la cola y arrancá la noche sin buscar tema por tema.</p>
+            </div>
+          </div>
+
+          <div className="panel">
+            <div className="field">
+              <label>Nueva playlist</label>
+              <div className="import-add-row">
+                <input
+                  type="text"
+                  placeholder="Ej: Arranque tranqui"
+                  value={newPlaylistName}
+                  onChange={(e) => setNewPlaylistName(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && createPlaylist()}
+                />
+                <button className="btn-primary" type="button" onClick={createPlaylist}>
+                  Crear
+                </button>
+              </div>
+            </div>
+            {playlistMessage && <p className="ok">{playlistMessage}</p>}
+          </div>
+
+          {playlists.length === 0 ? (
+            <p className="hint">Todavía no hay playlists. Creá una y sumale canciones desde la Biblioteca.</p>
+          ) : (
+            <div className="playlist-grid">
+              {playlists.map((p) => (
+                <div key={p.id} className={`playlist-card${openPlaylist?.id === p.id ? ' is-open' : ''}`}>
+                  <div className="playlist-card-head">
+                    <div>
+                      <div className="playlist-name">{p.name}</div>
+                      <div className="hint">{p.songCount} canciones</div>
+                    </div>
+                  </div>
+                  <div className="playlist-card-actions">
+                    <button
+                      className="btn-primary"
+                      disabled={p.songCount === 0}
+                      onClick={() => {
+                        setPushPlaylist(p)
+                        setPushSinger('')
+                      }}
+                    >
+                      Agregar a la sesión
+                    </button>
+                    <button
+                      className="btn-secondary"
+                      onClick={() => (openPlaylist?.id === p.id ? setOpenPlaylist(null) : showPlaylist(p.id))}
+                    >
+                      {openPlaylist?.id === p.id ? 'Cerrar' : 'Ver'}
+                    </button>
+                    <button className="btn-danger" onClick={() => deletePlaylist(p.id)}>
+                      Borrar
+                    </button>
+                  </div>
+
+                  {openPlaylist?.id === p.id && (
+                    <div className="playlist-songs">
+                      {openPlaylist.songs.length === 0 ? (
+                        <p className="hint">Vacía. Agregale canciones con "+ Playlist" desde la Biblioteca.</p>
+                      ) : (
+                        openPlaylist.songs.map((s) => (
+                          <div key={s.id} className="playlist-song-row">
+                            <span className="song-swatch" style={{ background: songColor(s.id) }} />
+                            <span className="playlist-song-title">{s.title}</span>
+                            <span className="dim-cell">{s.artist}</span>
+                            <button
+                              className="row-delete-btn"
+                              onClick={() => removeSongFromPlaylist(p.id, s.id)}
+                              title="Quitar de la playlist"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </section>
 
         <section className={`page${page === 'cola' ? ' active' : ''}`}>
@@ -1749,6 +1943,64 @@ export function App() {
               </button>
               <button className="btn-primary" onClick={submitResync} disabled={resyncing || !resyncLyricsText.trim()}>
                 {resyncing ? 'Sincronizando…' : 'Re-sincronizar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {addToPlaylistSong && (
+        <div className="modal-backdrop" onClick={() => setAddToPlaylistSong(null)}>
+          <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
+            <h2>Agregar "{addToPlaylistSong.title}" a…</h2>
+            {playlists.length === 0 ? (
+              <p className="hint">No hay playlists todavía. Creá una desde la pantalla Playlists.</p>
+            ) : (
+              <div className="playlist-picker">
+                {playlists.map((p) => (
+                  <button
+                    key={p.id}
+                    className="btn-secondary"
+                    onClick={() => addSongToPlaylist(p.id, addToPlaylistSong.id)}
+                  >
+                    {p.name} <span className="hint">({p.songCount})</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="modal-actions">
+              <button className="btn-secondary" onClick={() => setAddToPlaylistSong(null)}>
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pushPlaylist && (
+        <div className="modal-backdrop" onClick={() => setPushPlaylist(null)}>
+          <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
+            <h2>Agregar "{pushPlaylist.name}" a la sesión</h2>
+            <p className="hint">
+              Se van a encolar sus {pushPlaylist.songCount} canciones, en orden, al final de la cola.
+            </p>
+            <div className="field">
+              <label>Cantante (opcional)</label>
+              <input
+                type="text"
+                placeholder="Dejalo vacío para asignar después"
+                value={pushSinger}
+                onChange={(e) => setPushSinger(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && submitPushPlaylist()}
+              />
+              <p className="hint">Si lo dejás vacío quedan como "Sin asignar" y podés asignarlas a medida que se anotan.</p>
+            </div>
+            <div className="modal-actions">
+              <button className="btn-secondary" onClick={() => setPushPlaylist(null)}>
+                Cancelar
+              </button>
+              <button className="btn-primary" onClick={submitPushPlaylist}>
+                Agregar a la cola
               </button>
             </div>
           </div>

@@ -38,3 +38,22 @@ export const queueItems = sqliteTable('queue_items', {
   position: integer('position').notNull(),
   createdAt: integer('created_at').notNull(),
 })
+
+/**
+ * Listas curadas de antemano ("Arranque tranqui", "Éxitos 2000s") para no
+ * tener que buscar canción por canción en el momento. Se pueden empujar
+ * enteras a la cola en vivo.
+ */
+export const playlists = sqliteTable('playlists', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  createdAt: integer('created_at').notNull(),
+})
+
+/** Tabla puente playlist↔canción. `position` define el orden dentro de la lista. */
+export const playlistSongs = sqliteTable('playlist_songs', {
+  id: text('id').primaryKey(),
+  playlistId: text('playlist_id').notNull(),
+  songId: text('song_id').notNull(),
+  position: integer('position').notNull(),
+})

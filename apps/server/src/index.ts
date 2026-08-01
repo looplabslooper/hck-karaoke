@@ -30,6 +30,14 @@ import {
   setImportRoots,
   listExternalPaths,
   EXTERNAL_PREFIX,
+  listPlaylists,
+  createPlaylist,
+  getPlaylist,
+  renamePlaylist,
+  deletePlaylist,
+  addSongToPlaylist,
+  removeSongFromPlaylist,
+  addPlaylistToQueue,
 } from './db/queries.js'
 import { runAlignment } from './sync/align.js'
 import { transcodeToMp3 } from './sync/transcode.js'
@@ -144,6 +152,59 @@ app.post('/api/queue/:id/score', (req, res) => {
 app.get('/api/queue/unscored', (_req, res) => res.json(listUnscored()))
 
 app.get('/api/leaderboard', (_req, res) => res.json(getLeaderboard()))
+
+// --- playlists ---------------------------------------------------------
+
+app.get('/api/playlists', (_req, res) => res.json(listPlaylists()))
+
+app.post('/api/playlists', (req, res) => {
+  const name = (req.body.name as string | undefined)?.trim()
+  if (!name) return res.status(400).json({ error: 'falta el nombre' })
+  res.json(createPlaylist(name))
+})
+
+app.get('/api/playlists/:id', (req, res) => {
+  const detail = getPlaylist(req.params.id)
+  if (!detail) return res.status(404).json({ error: 'playlist not found' })
+  res.json(detail)
+})
+
+app.patch('/api/playlists/:id', (req, res) => {
+  const name = (req.body.name as string | undefined)?.trim()
+  if (!name) return res.status(400).json({ error: 'falta el nombre' })
+  if (!renamePlaylist(req.params.id, name)) return res.status(404).json({ error: 'playlist not found' })
+  res.json({ ok: true })
+})
+
+app.delete('/api/playlists/:id', (req, res) => {
+  if (!deletePlaylist(req.params.id)) return res.status(404).json({ error: 'playlist not found' })
+  res.json({ ok: true })
+})
+
+app.post('/api/playlists/:id/songs', (req, res) => {
+  const songId = req.body.songId as string | undefined
+  if (!songId) return res.status(400).json({ error: 'falta songId' })
+  if (!addSongToPlaylist(req.params.id, songId)) {
+    return res.status(404).json({ error: 'no existe la playlist o la canción' })
+  }
+  res.json({ ok: true })
+})
+
+app.delete('/api/playlists/:id/songs/:songId', (req, res) => {
+  if (!removeSongFromPlaylist(req.params.id, req.params.songId)) {
+    return res.status(404).json({ error: 'esa canción no está en la playlist' })
+  }
+  res.json({ ok: true })
+})
+
+// Empuja la playlist entera al final de la cola en vivo — el atajo para no
+// cargar 20 canciones a mano al arrancar la noche.
+app.post('/api/playlists/:id/add-to-queue', (req, res) => {
+  const singer = (req.body.singer as string | undefined) ?? ''
+  const added = addPlaylistToQueue(req.params.id, singer)
+  if (added === 0) return res.status(404).json({ error: 'playlist vacía o inexistente' })
+  res.json({ added })
+})
 
 // --- subida de canciones -----------------------------------------------
 
