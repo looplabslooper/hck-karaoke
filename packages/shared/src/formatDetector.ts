@@ -27,8 +27,12 @@ export interface UploadInput {
   audioDurationSeconds?: number
 }
 
-const AUDIO_EXT = /\.(mp3|ogg|opus|wav)$/i
-const VIDEO_EXT = /\.(mp4|webm|mov)$/i
+// .m4a es AAC en contenedor MP4 — audio puro, sin pista de video. Aparece en
+// catálogos reales (el legado de EcuaKaraoke guarda todo así) y el navegador
+// lo decodifica igual que un mp3.
+export const AUDIO_EXT = /\.(mp3|ogg|opus|wav|m4a)$/i
+export const VIDEO_EXT = /\.(mp4|webm|mov)$/i
+export const LYRICS_EXT = /\.(cdg|json|lrc)$/i
 
 /**
  * Detecta el formato de un karaoke subido y evalúa qué tan bien queda en el

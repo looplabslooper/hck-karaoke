@@ -7,6 +7,17 @@ Formato: recomendación concreta → por qué → qué se pierde → cuándo cam
 
 ---
 
+> **Actualización 2026-07-27 — reversión explícita del usuario:** este documento originalmente
+> asumía **dos apps de pantalla** (`apps/screen` para el TV/monitor del kiosco, `apps/admin` como
+> control remoto que nunca reproduce audio), sincronizadas por WebSocket. El usuario pidió
+> explícitamente reemplazar eso por **una sola pantalla**: navegación, biblioteca, letra y modo
+> pantalla completa, todo en una misma app (`apps/admin`, ahora la única app de frontend además del
+> futuro `apps/mobile`). `apps/screen` fue eliminada del repo. El razonamiento de abajo sobre *por qué*
+> se había elegido la separación se deja intacto (es útil si el proyecto algún día vuelve a necesitar
+> multi-pantalla — varias TVs, por ejemplo) pero **ya no aplica como decisión vigente**; ver
+> `ROADMAP.md` para el detalle de qué cambió en el código. No la vuelvas a proponer como si estuviera
+> vigente.
+
 ## Resumen ejecutivo (las 5 decisiones que importan)
 
 1. **Un solo monorepo TypeScript**: Node 22 LTS + React + Vite. Las tres superficies (pantalla, admin, celular) son la misma app con tres entradas y un paquete `shared` con el protocolo y el motor de karaoke.

@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Karaoke Walk-On</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --stage-black:#120E14;
+    --stage-black-2:#1B141F;
+    --marquee-gold:#E8A93D;
+    --spot-pink:#FF4D8D;
+    --paper:#F2EDE4;
+    --dim:#8B8494;
+  }
+  *{box-sizing:border-box;}
+  html,body{
+    margin:0; padding:0; width:100%; height:100%;
+    background:var(--stage-black);
+    overflow:hidden;
+    font-family:'Space Grotesk',sans-serif;
+    color:var(--paper);
+  }
+  #stage{
+    position:fixed; inset:0;
+    width:100vw; height:100vh;
+    display:block;
+    background:var(--stage-black);
+  }
+  video{ display:none; }
+
+  #hud{
+    position:fixed; left:16px; bottom:16px;
+    max-width:380px;
+    background:rgba(18,14,20,0.82);
+    border:1px solid rgba(232,169,61,0.35);
+    border-radius:10px;
+    padding:14px 16px;
+    font-size:13px;
+    line-height:1.55;
+    backdrop-filter:blur(6px);
+    transition:opacity .2s ease, transform .2s ease;
+    z-index:50;
+  }
+  #hud.hidden{ opacity:0; transform:translateY(8px); pointer-events:none; }
+  #hud h1{
+    font-family:'Anton',sans-serif;
+    font-weight:400;
+    letter-spacing:.5px;
+    font-size:18px;
+    margin:0 0 8px 0;
+    color:var(--marquee-gold);
+  }
+  #hud .row{ display:flex; gap:8px; align-items:baseline; margin:3px 0; }
+  #hud kbd{
+    background:rgba(242,237,228,0.1);
+    border:1px solid rgba(242,237,228,0.25);
+    border-radius:4px;
+    padding:1px 7px;
+    font-size:12px;
+    font-family:'Space Grotesk',sans-serif;
+    color:var(--paper);
+    min-width:20px;
+    text-align:center;
+  }
+  #hud .desc{ color:var(--dim); }
+  #hud .status{
+    margin-top:10px; padding-top:10px;
+    border-top:1px dashed rgba(242,237,228,0.15);
+    font-weight:700;
+  }
+  #hud .status.ok{ color:#7CD98C; }
+  #hud .status.warn{ color:var(--spot-pink); }
+
+  #calibratePanel{
+    position:fixed; right:16px; top:16px;
+    background:rgba(18,14,20,0.82);
+    border:1px solid rgba(232,169,61,0.35);
+    border-radius:10px;
+    padding:14px 16px;
+    width:260px;
+    font-size:13px;
+    backdrop-filter:blur(6px);
+    display:none;
+    z-index:50;
+  }
+  #calibratePanel.show{ display:block; }
+  #calibratePanel h2{
+    font-family:'Anton',sans-serif; font-weight:400;
+    font-size:15px; margin:0 0 8px 0; color:var(--marquee-gold);
+  }
+  #calibratePanel label{ display:block; margin-top:10px; color:var(--dim); font-size:12px; }
+  #calibratePanel input[type=range]{ width:100%; accent-color:var(--spot-pink); }
+  #swatch{
+    width:100%; height:28px; border-radius:6px; margin-top:6px;
+    border:1px solid rgba(242,237,228,0.25);
+  }
+
+  #toast{
+    position:fixed; top:22px; left:50%; transform:translateX(-50%);
+    font-family:'Anton',sans-serif; letter-spacing:1px;
+    font-size:22px; color:var(--marquee-gold);
+    text-shadow:0 0 18px rgba(232,169,61,0.6);
+    opacity:0; transition:opacity .3s ease;
+    z-index:60; pointer-events:none;
+  }
+  #toast.show{ opacity:1; }
+
+  #backLink{
+    position:fixed; left:16px; top:16px;
+    z-index:60;
+    display:inline-flex; align-items:center; gap:6px;
+    background:rgba(18,14,20,0.82);
+    border:1px solid rgba(232,169,61,0.35);
+    border-radius:999px;
+    padding:8px 14px;
+    font-size:12px; font-weight:700;
+    color:var(--paper);
+    text-decoration:none;
+    backdrop-filter:blur(6px);
+  }
+  #backLink:hover{ border-color:var(--marquee-gold); color:var(--marquee-gold); }
+</style>
+</head>
+<body>
+
+<a id="backLink" href="/">← Volver al kiosco</a>
+<canvas id="stage"></canvas>
+<video id="cam" autoplay playsinline muted></video>
+<input type="file" id="fileInput" accept="image/*" style="display:none">
+<div id="uploadHint" style="position:fixed; right:16px; bottom:16px; z-index:50; font-size:12px; color:#8B8494; background:rgba(18,14,20,0.82); border:1px solid rgba(232,169,61,0.35); border-radius:10px; padding:10px 14px; cursor:pointer;">
+  📁 <b style="color:#F2EDE4">U</b> — cargar foto desde tu compu (sin cámara)
+</div>
+
+<div id="toast"></div>
+
+<div id="hud">
+  <h1>KARAOKE WALK-ON</h1>
+  <div class="row"><kbd>S</kbd><span class="desc">Mostrar/ocultar panel de calibración (pantalla verde)</span></div>
+  <div class="row"><kbd>clic</kbd><span class="desc">En modo calibración, hacé click sobre el fondo verde para tomar el color de referencia</span></div>
+  <div class="row"><kbd>C</kbd><span class="desc">Capturar foto desde la cámara y recortar a la persona</span></div>
+  <div class="row"><kbd>U</kbd><span class="desc">O cargar una foto desde tu compu (no necesita cámara ni pantalla verde)</span></div>
+  <div class="row"><kbd>espacio</kbd><span class="desc">Disparar la animación de caminata</span></div>
+  <div class="row"><kbd>D</kbd><span class="desc">Cambiar dirección: cruzar pantalla / caminar hacia cámara</span></div>
+  <div class="row"><kbd>H</kbd><span class="desc">Ocultar este panel (antes de salir al aire)</span></div>
+  <div class="row"><kbd>F</kbd><span class="desc">Pantalla completa</span></div>
+  <div id="statusLine" class="status warn">Cámara: conectando…</div>
+</div>
+
+<div id="calibratePanel">
+  <h2>Calibración pantalla verde</h2>
+  <div id="swatch"></div>
+  <label>Tolerancia: <span id="tolVal">70</span></label>
+  <input type="range" id="tolerance" min="10" max="140" value="70">
+  <label>Suavizado de borde: <span id="featherVal">18</span></label>
+  <input type="range" id="feather" min="0" max="60" value="18">
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('stage');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  const video = document.getElementById('cam');
+  const hud = document.getElementById('hud');
+  const calibratePanel = document.getElementById('calibratePanel');
+  const statusLine = document.getElementById('statusLine');
+  const toast = document.getElementById('toast');
+  const swatch = document.getElementById('swatch');
+  const tolInput = document.getElementById('tolerance');
+  const featherInput = document.getElementById('feather');
+  const tolVal = document.getElementById('tolVal');
+  const featherVal = document.getElementById('featherVal');
+
+  let W = 0, H = 0;
+  function resize(){
+    W = canvas.width = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // ---------- State ----------
+  let mode = 'idle';          // idle | calibrate | walking
+  let calibrating = false;
+  let keyColor = { r: 40, g: 200, b: 90 }; // default green-screen guess
+  let tolerance = 70;
+  let feather = 18;
+  let cutoutCanvas = null;    // holds last captured cutout (with alpha)
+  let cutoutReady = false;
+  let direction = 'across';   // across | toward
+  let camReady = false;
+
+  function showToast(msg, ms = 1400){
+    toast.textContent = msg;
+    toast.classList.add('show');
+    clearTimeout(showToast._t);
+    showToast._t = setTimeout(() => toast.classList.remove('show'), ms);
+  }
+
+  function setStatus(msg, ok){
+    statusLine.textContent = msg;
+    statusLine.className = 'status ' + (ok ? 'ok' : 'warn');
+  }
+
+  // ---------- Camera ----------
+  let camError = null;
+
+  function startCamera(){
+    camError = null;
+    setStatus('Cámara: conectando…', false);
+
+    if (location.protocol === 'file:'){
+      camError = 'Este archivo se abrió como file://. Muchos navegadores bloquean la cámara en ese modo. Serví la carpeta con un servidor local (ver instrucciones abajo) y volvé a intentar.';
+      setStatus(camError, false);
+      return;
+    }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      camError = 'Este navegador no expone acceso a cámara en este contexto (¿http sin certificado, o navegador muy viejo?). Probá con Chrome/Edge actualizado sobre http://localhost o https://.';
+      setStatus(camError, false);
+      return;
+    }
+
+    navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 }, audio: false })
+      .then(stream => {
+        video.srcObject = stream;
+        video.onloadedmetadata = () => {
+          video.play().catch(()=>{});
+          camReady = true;
+          setStatus('Cámara lista — calibrá el verde con [S], luego capturá con [C]', true);
+        };
+      })
+      .catch(err => {
+        camError = 'No se pudo acceder a la cámara (' + err.name + '): ' + err.message + '. Click en la pantalla para reintentar.';
+        setStatus(camError, false);
+      });
+  }
+
+  try {
+    startCamera();
+  } catch (e) {
+    camError = 'Error inesperado iniciando la cámara: ' + e.message;
+    setStatus(camError, false);
+  }
+
+  // click anywhere (outside calibration mode) retries camera access — useful after
+  // a permission prompt was dismissed or blocked, since some browsers require a
+  // user gesture before it will ask again
+  canvas.addEventListener('click', () => {
+    if (!camReady) startCamera();
+  }, { capture: true });
+
+  // ---------- Helpers: draw mirrored camera frame into an offscreen canvas ----------
+  const off = document.createElement('canvas');
+  const offCtx = off.getContext('2d', { willReadFrequently: true });
+
+  function grabMirroredFrame(){
+    if (!camReady) return null;
+    const vw = video.videoWidth, vh = video.videoHeight;
+    off.width = vw; off.height = vh;
+    offCtx.save();
+    offCtx.translate(vw, 0);
+    offCtx.scale(-1, 1);
+    offCtx.drawImage(video, 0, 0, vw, vh);
+    offCtx.restore();
+    return offCtx.getImageData(0, 0, vw, vh);
+  }
+
+  // ---------- Chroma key cutout ----------
+  function chromaKeyCutout(imageData){
+    const { data, width, height } = imageData;
+    const kr = keyColor.r, kg = keyColor.g, kb = keyColor.b;
+    for (let i = 0; i < data.length; i += 4){
+      const r = data[i], g = data[i+1], b = data[i+2];
+      const dist = Math.sqrt((r-kr)**2 + (g-kg)**2 + (b-kb)**2);
+      if (dist < tolerance){
+        data[i+3] = 0;
+      } else if (dist < tolerance + feather){
+        const t = (dist - tolerance) / Math.max(1, feather);
+        data[i+3] = Math.round(255 * t);
+      }
+    }
+    const c = document.createElement('canvas');
+    c.width = width; c.height = height;
+    c.getContext('2d').putImageData(imageData, 0, 0);
+    return c;
+  }
+
+  function trimTransparent(srcCanvas){
+    // crop to bounding box of non-transparent pixels for a tighter walk-on sprite
+    const w = srcCanvas.width, h = srcCanvas.height;
+    const sctx = srcCanvas.getContext('2d');
+    const data = sctx.getImageData(0, 0, w, h).data;
+    let minX=w, minY=h, maxX=0, maxY=0, found=false;
+    const step = 2; // sample every 2px for speed
+    for (let y=0; y<h; y+=step){
+      for (let x=0; x<w; x+=step){
+        const a = data[(y*w+x)*4+3];
+        if (a > 20){
+          found = true;
+          if (x<minX) minX=x; if (x>maxX) maxX=x;
+          if (y<minY) minY=y; if (y>maxY) maxY=y;
+        }
+      }
+    }
+    if (!found) return srcCanvas;
+    const pad = 6;
+    minX = Math.max(0, minX-pad); minY = Math.max(0, minY-pad);
+    maxX = Math.min(w, maxX+pad); maxY = Math.min(h, maxY+pad);
+    const cw = maxX-minX, ch = maxY-minY;
+    const out = document.createElement('canvas');
+    out.width = cw; out.height = ch;
+    out.getContext('2d').drawImage(srcCanvas, minX, minY, cw, ch, 0, 0, cw, ch);
+    return out;
+  }
+
+  // ---------- Upload photo (no camera needed) ----------
+  const fileInput = document.getElementById('fileInput');
+  const uploadHint = document.getElementById('uploadHint');
+
+  function ovalMaskCutout(img){
+    const c = document.createElement('canvas');
+    c.width = img.naturalWidth; c.height = img.naturalHeight;
+    const cctx = c.getContext('2d');
+    cctx.drawImage(img, 0, 0);
+
+    const maskCanvas = document.createElement('canvas');
+    maskCanvas.width = c.width; maskCanvas.height = c.height;
+    const mctx = maskCanvas.getContext('2d');
+    const rx = c.width * 0.46, ry = c.height * 0.48;
+    mctx.save();
+    mctx.translate(c.width/2, c.height/2);
+    mctx.scale(rx, ry);
+    const g = mctx.createRadialGradient(0, 0, 0.5, 0, 0, 1);
+    g.addColorStop(0, 'rgba(255,255,255,1)');
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    mctx.fillStyle = g;
+    mctx.beginPath();
+    mctx.arc(0, 0, 1, 0, Math.PI * 2);
+    mctx.fill();
+    mctx.restore();
+
+    cctx.globalCompositeOperation = 'destination-in';
+    cctx.drawImage(maskCanvas, 0, 0);
+    cctx.globalCompositeOperation = 'source-over';
+    return c;
+  }
+
+  function loadPhotoFromFile(file){
+    const img = new Image();
+    img.onload = () => {
+      const cut = ovalMaskCutout(img);
+      cutoutCanvas = trimTransparent(cut);
+      cutoutReady = true;
+      showToast('FOTO CARGADA ✓  —  ESPACIO para la caminata');
+      URL.revokeObjectURL(img.src);
+    };
+    img.onerror = () => showToast('No se pudo abrir esa imagen');
+    img.src = URL.createObjectURL(file);
+  }
+
+  fileInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (file) loadPhotoFromFile(file);
+    fileInput.value = '';
+  });
+  uploadHint.addEventListener('click', () => fileInput.click());
+
+  // ---------- Capture ----------
+  function capturePhoto(){
+    if (!camReady){ showToast('Cámara no lista'); return; }
+    const frame = grabMirroredFrame();
+    if (!frame) return;
+    const cut = chromaKeyCutout(frame);
+    cutoutCanvas = trimTransparent(cut);
+    cutoutReady = true;
+    showToast('FOTO LISTA ✓  —  ESPACIO para la caminata');
+  }
+
+  // ---------- Calibration click ----------
+  canvas.addEventListener('click', (e) => {
+    if (mode !== 'calibrate' || !camReady) return;
+    const frame = grabMirroredFrame();
+    if (!frame) return;
+    // map click coords (css px) to frame coords
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = frame.width / rect.width;
+    const scaleY = frame.height / rect.height;
+    const fx = Math.floor((e.clientX - rect.left) * scaleX);
+    const fy = Math.floor((e.clientY - rect.top) * scaleY);
+    const idx = (fy * frame.width + fx) * 4;
+    keyColor = { r: frame.data[idx], g: frame.data[idx+1], b: frame.data[idx+2] };
+    swatch.style.background = `rgb(${keyColor.r},${keyColor.g},${keyColor.b})`;
+    showToast('Color de referencia tomado');
+  });
+
+  tolInput.addEventListener('input', () => { tolerance = +tolInput.value; tolVal.textContent = tolerance; });
+  featherInput.addEventListener('input', () => { feather = +featherInput.value; featherVal.textContent = feather; });
+
+  // ---------- Walk animation ----------
+  let walkStart = 0;
+  const WALK_DURATION = 6500; // ms
+
+  function easeInOutSine(t){ return -(Math.cos(Math.PI * t) - 1) / 2; }
+
+  function wrapText(text, cx, cy, maxWidth, lineHeight){
+    const words = text.split(' ');
+    let line = '', lines = [];
+    for (const w of words){
+      const test = line ? line + ' ' + w : w;
+      if (ctx.measureText(test).width > maxWidth && line){
+        lines.push(line);
+        line = w;
+      } else {
+        line = test;
+      }
+    }
+    if (line) lines.push(line);
+    const startY = cy - ((lines.length - 1) * lineHeight) / 2;
+    lines.forEach((l, i) => ctx.fillText(l, cx, startY + i * lineHeight));
+  }
+
+  function drawStageBackground(t){
+    // gradient backdrop
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, '#1B141F');
+    g.addColorStop(0.55, '#120E14');
+    g.addColorStop(1, '#0A070C');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+
+    // soft spotlights
+    const spot = ctx.createRadialGradient(W*0.5, H*0.15, 20, W*0.5, H*0.15, W*0.6);
+    spot.addColorStop(0, 'rgba(232,169,61,0.10)');
+    spot.addColorStop(1, 'rgba(232,169,61,0)');
+    ctx.fillStyle = spot;
+    ctx.fillRect(0, 0, W, H);
+
+    // perspective floor
+    const floorY = H * 0.72;
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(0, floorY);
+    ctx.lineTo(W, floorY);
+    ctx.lineTo(W, H);
+    ctx.lineTo(0, H);
+    ctx.closePath();
+    ctx.clip();
+    const floorG = ctx.createLinearGradient(0, floorY, 0, H);
+    floorG.addColorStop(0, '#241A29');
+    floorG.addColorStop(1, '#0A070C');
+    ctx.fillStyle = floorG;
+    ctx.fillRect(0, floorY, W, H - floorY);
+
+    // scrolling perspective lines to sell motion
+    const lineCount = 14;
+    const scrollOffset = (t * 0.00045) % 1;
+    ctx.strokeStyle = 'rgba(232,169,61,0.18)';
+    ctx.lineWidth = 1;
+    for (let i = 0; i < lineCount; i++){
+      const p = (i / lineCount + scrollOffset) % 1;
+      const y = floorY + p * (H - floorY);
+      const spread = (y - floorY) / (H - floorY);
+      const xInset = W * 0.5 * spread;
+      ctx.beginPath();
+      ctx.moveTo(xInset, y);
+      ctx.lineTo(W - xInset, y);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawWalkingCutout(progress){
+    if (!cutoutCanvas) return;
+    const floorY = H * 0.72;
+    const cw0 = cutoutCanvas.width, ch0 = cutoutCanvas.height;
+    const aspect = cw0 / ch0;
+
+    let baseH, cx, cy, scale;
+    const stepPhase = progress * 18; // number of "steps" over the animation
+    const bob = Math.abs(Math.sin(stepPhase)) * 10;
+    const tilt = Math.sin(stepPhase) * 0.035;
+
+    if (direction === 'across'){
+      baseH = H * 0.5;
+      const startX = -baseH*aspect*0.6;
+      const endX = W + baseH*aspect*0.6;
+      cx = startX + (endX - startX) * progress;
+      cy = floorY - baseH/2 + Math.sin(stepPhase) * 0 - bob;
+      scale = 1;
+    } else {
+      // toward camera: scale up + move slightly down, centered
+      const s0 = 0.28, s1 = 1.05;
+      scale = s0 + (s1 - s0) * easeInOutSine(progress);
+      baseH = H * 0.62 * scale;
+      cx = W/2;
+      cy = (floorY - baseH*0.42) + (H*0.06)*progress - bob*scale;
+    }
+
+    const dh = baseH;
+    const dw = dh * aspect;
+
+    // contact shadow
+    ctx.save();
+    ctx.globalAlpha = 0.35 * scale;
+    ctx.fillStyle = '#000';
+    ctx.beginPath();
+    ctx.ellipse(cx, floorY + 4, dw*0.32, 10*scale, 0, 0, Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+
+    // marquee glow behind figure
+    ctx.save();
+    const glow = ctx.createRadialGradient(cx, cy, 10, cx, cy, dw*0.8);
+    glow.addColorStop(0, 'rgba(255,77,141,0.22)');
+    glow.addColorStop(1, 'rgba(255,77,141,0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(cx - dw, cy - dh, dw*2, dh*2);
+    ctx.restore();
+
+    ctx.save();
+    ctx.translate(cx, cy - dh/2);
+    ctx.rotate(tilt);
+    ctx.drawImage(cutoutCanvas, -dw/2, 0, dw, dh);
+    ctx.restore();
+  }
+
+  function walkLoop(ts){
+    if (!walkStart) walkStart = ts;
+    const elapsed = ts - walkStart;
+    let raw = elapsed / WALK_DURATION;
+    if (raw > 1){
+      mode = 'idle';
+      walkStart = 0;
+      requestAnimationFrame(mainLoop);
+      return;
+    }
+    // ease in/out overall envelope
+    const progress = easeInOutSine(Math.min(1, raw));
+    drawStageBackground(elapsed);
+    drawWalkingCutout(progress);
+
+    // fade in/out at edges
+    let alpha = 1;
+    if (raw < 0.08) alpha = raw/0.08;
+    if (raw > 0.9) alpha = (1-raw)/0.1;
+    if (alpha < 1){
+      ctx.save();
+      ctx.globalAlpha = 1 - alpha;
+      ctx.fillStyle = '#0A070C';
+      ctx.fillRect(0,0,W,H);
+      ctx.restore();
+    }
+
+    requestAnimationFrame(walkLoop);
+  }
+
+  // ---------- Idle / calibrate live view ----------
+  function mainLoop(){
+    if (mode === 'walking') return; // handled by walkLoop
+    if (camReady){
+      const vw = video.videoWidth, vh = video.videoHeight;
+      // cover-fit mirrored camera into canvas
+      const scale = Math.max(W/vw, H/vh);
+      const dw = vw*scale, dh = vh*scale;
+      const dx = (W-dw)/2, dy = (H-dh)/2;
+      ctx.save();
+      ctx.translate(W, 0);
+      ctx.scale(-1, 1);
+      ctx.drawImage(video, W-dw-dx, dy, dw, dh);
+      ctx.restore();
+
+      if (mode === 'calibrate'){
+        ctx.fillStyle = 'rgba(0,0,0,0.35)';
+        ctx.fillRect(0, 0, W, H);
+        ctx.fillStyle = 'rgba(232,169,61,0.9)';
+        ctx.font = "20px 'Space Grotesk', sans-serif";
+        ctx.textAlign = 'center';
+        ctx.fillText('Hacé click sobre el fondo verde para calibrar', W/2, 40);
+      }
+    } else if (cutoutReady){
+      drawStageBackground(performance.now());
+      const dh = H * 0.55, dw = dh * (cutoutCanvas.width / cutoutCanvas.height);
+      const cx = W/2, cy = H*0.72 - dh/2;
+      ctx.save();
+      ctx.globalAlpha = 0.3;
+      ctx.fillStyle = '#000';
+      ctx.beginPath();
+      ctx.ellipse(cx, H*0.72 + 4, dw*0.3, 9, 0, 0, Math.PI*2);
+      ctx.fill();
+      ctx.restore();
+      ctx.drawImage(cutoutCanvas, cx - dw/2, cy - dh/2, dw, dh);
+      ctx.fillStyle = 'rgba(232,169,61,0.95)';
+      ctx.font = "18px 'Anton', sans-serif";
+      ctx.textAlign = 'center';
+      ctx.fillText('FOTO LISTA — ESPACIO PARA LA CAMINATA', W/2, H*0.12);
+    } else {
+      ctx.fillStyle = '#120E14';
+      ctx.fillRect(0,0,W,H);
+      ctx.textAlign = 'center';
+      if (camError){
+        ctx.fillStyle = '#FF4D8D';
+        ctx.font = "20px 'Anton', sans-serif";
+        ctx.fillText('SIN ACCESO A LA CÁMARA', W/2, H/2 - 40);
+        ctx.fillStyle = '#F2EDE4';
+        ctx.font = "14px 'Space Grotesk', sans-serif";
+        wrapText(camError, W/2, H/2, Math.min(700, W - 80), 20);
+        ctx.fillStyle = '#8B8494';
+        ctx.font = "13px 'Space Grotesk', sans-serif";
+        ctx.fillText('(click en la pantalla para reintentar)', W/2, H/2 + 110);
+      } else {
+        ctx.fillStyle = '#8B8494';
+        ctx.font = "16px 'Space Grotesk', sans-serif";
+        ctx.fillText('Esperando cámara…', W/2, H/2);
+      }
+    }
+    requestAnimationFrame(mainLoop);
+  }
+  requestAnimationFrame(mainLoop);
+
+  // ---------- Keyboard ----------
+  window.addEventListener('keydown', (e) => {
+    const k = e.key.toLowerCase();
+    if (k === 's'){
+      calibrating = !calibrating;
+      mode = calibrating ? 'calibrate' : 'idle';
+      calibratePanel.classList.toggle('show', calibrating);
+    } else if (k === 'c'){
+      capturePhoto();
+    } else if (k === 'u'){
+      fileInput.click();
+    } else if (k === ' '){
+      e.preventDefault();
+      if (!cutoutReady){ showToast('Todavía no capturaste una foto — [C]'); return; }
+      mode = 'walking';
+      walkStart = 0;
+      requestAnimationFrame(walkLoop);
+    } else if (k === 'd'){
+      direction = direction === 'across' ? 'toward' : 'across';
+      showToast('Dirección: ' + (direction === 'across' ? 'cruzando pantalla' : 'hacia cámara'));
+    } else if (k === 'h'){
+      hud.classList.toggle('hidden');
+    } else if (k === 'f'){
+      if (!document.fullscreenElement) document.documentElement.requestFullscreen();
+      else document.exitFullscreen();
+    }
+  });
+
+  swatch.style.background = `rgb(${keyColor.r},${keyColor.g},${keyColor.b})`;
+})();
+</script>
+</body>
+</html>

@@ -13,29 +13,12 @@ function resolveUvBinary(): string {
   return fs.existsSync(candidate) ? candidate : 'uv'
 }
 
-export interface AlignInput {
-  audioPath: string
-  lyricsText: string
-  language?: string
-}
-
-/**
- * Corre el pipeline de alineación forzada (WhisperX, ver /pipeline) como
- * subproceso — no se mezcla Python en el proceso del servidor.
- */
-export function runAlignment({ audioPath, lyricsText, language = 'es' }: AlignInput): Promise<LyricsDoc> {
+/** Corre un script del pipeline (`pipeline/<script>`) como subproceso vía
+ * `uv run` — nunca se mezcla Python con el proceso Node. */
+function runPipelineScript(script: string, args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiosco-sync-'))
-    const lyricsFile = path.join(tmpDir, 'lyrics.txt')
-    const outFile = path.join(tmpDir, 'out.json')
-    fs.writeFileSync(lyricsFile, lyricsText, 'utf-8')
-
     const uvBin = resolveUvBinary()
-    const child = spawn(
-      uvBin,
-      ['run', 'python', 'align.py', '--audio', audioPath, '--lyrics', lyricsFile, '--language', language, '--out', outFile],
-      { cwd: pipelineDir },
-    )
+    const child = spawn(uvBin, ['run', 'python', script, ...args], { cwd: pipelineDir })
 
     let stderr = ''
     child.stderr.on('data', (chunk) => {
@@ -43,24 +26,70 @@ export function runAlignment({ audioPath, lyricsText, language = 'es' }: AlignIn
     })
 
     child.on('error', (err) => {
-      fs.rmSync(tmpDir, { recursive: true, force: true })
-      reject(new Error(`No se pudo ejecutar el pipeline de sincronización (¿está "uv" instalado?): ${err.message}`))
+      reject(new Error(`No se pudo ejecutar ${script} (¿está "uv" instalado?): ${err.message}`))
     })
 
     child.on('close', (code) => {
-      if (code !== 0) {
-        fs.rmSync(tmpDir, { recursive: true, force: true })
-        reject(new Error(`El pipeline de sincronización falló (código ${code}): ${stderr.slice(-2000)}`))
-        return
-      }
-      try {
-        const lyrics = JSON.parse(fs.readFileSync(outFile, 'utf-8')) as LyricsDoc
-        fs.rmSync(tmpDir, { recursive: true, force: true })
-        resolve(lyrics)
-      } catch (err) {
-        fs.rmSync(tmpDir, { recursive: true, force: true })
-        reject(err instanceof Error ? err : new Error(String(err)))
-      }
+      if (code !== 0) reject(new Error(`${script} falló (código ${code}): ${stderr.slice(-2000)}`))
+      else resolve()
     })
   })
+}
+
+export interface AlignInput {
+  audioPath: string
+  lyricsText: string
+  language?: string
+  /** Separar voz/instrumental con Demucs antes de alinear — mejora la
+   * precisión en temas con mucha base instrumental, a costa de un rato más
+   * de proceso. Ver DECISIONES-STACK.md §12(B) y ROADMAP.md. */
+  separateVocals?: boolean
+  /** Si separateVocals=true, copiar el instrumental.wav separado a esta ruta
+   * (para guardarlo como pista de "voz original apagada") antes de que se
+   * borre el directorio temporal. Ignorado si separateVocals=false. */
+  instrumentalOutputPath?: string
+}
+
+/**
+ * Corre el pipeline de alineación forzada (WhisperX, ver /pipeline) — y
+ * opcionalmente la separación de voz (Demucs) antes, alineando contra el
+ * stem vocal en vez de la mezcla completa.
+ */
+export async function runAlignment({
+  audioPath,
+  lyricsText,
+  language = 'es',
+  separateVocals = false,
+  instrumentalOutputPath,
+}: AlignInput): Promise<LyricsDoc> {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiosco-sync-'))
+  try {
+    const lyricsFile = path.join(tmpDir, 'lyrics.txt')
+    const outFile = path.join(tmpDir, 'out.json')
+    fs.writeFileSync(lyricsFile, lyricsText, 'utf-8')
+
+    let alignAudioPath = audioPath
+    if (separateVocals) {
+      const separatedDir = path.join(tmpDir, 'separated')
+      await runPipelineScript('separate.py', ['--audio', audioPath, '--out-dir', separatedDir])
+      alignAudioPath = path.join(separatedDir, 'vocals.wav')
+      if (instrumentalOutputPath) {
+        fs.copyFileSync(path.join(separatedDir, 'instrumental.wav'), instrumentalOutputPath)
+      }
+    }
+
+    await runPipelineScript('align.py', [
+      '--audio',
+      alignAudioPath,
+      '--lyrics',
+      lyricsFile,
+      '--language',
+      language,
+      '--out',
+      outFile,
+    ])
+    return JSON.parse(fs.readFileSync(outFile, 'utf-8')) as LyricsDoc
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  }
 }

@@ -46,34 +46,6 @@ importers:
         specifier: ^6.0.3
         version: 6.4.3(@types/node@26.1.1)(tsx@4.23.1)
 
-  apps/screen:
-    dependencies:
-      '@kiosco/shared':
-        specifier: workspace:*
-        version: link:../../packages/shared
-      react:
-        specifier: ^18.3.1
-        version: 18.3.1
-      react-dom:
-        specifier: ^18.3.1
-        version: 18.3.1(react@18.3.1)
-    devDependencies:
-      '@types/react':
-        specifier: ^18.3.12
-        version: 18.3.31
-      '@types/react-dom':
-        specifier: ^18.3.1
-        version: 18.3.7(@types/react@18.3.31)
-      '@vitejs/plugin-react':
-        specifier: ^4.3.4
-        version: 4.7.0(supports-color@8.1.1)(vite@6.4.3(@types/node@26.1.1)(tsx@4.23.1))
-      typescript:
-        specifier: ^5.7.2
-        version: 5.9.3
-      vite:
-        specifier: ^6.0.3
-        version: 6.4.3(@types/node@26.1.1)(tsx@4.23.1)
-
   apps/server:
     dependencies:
       '@kiosco/shared':

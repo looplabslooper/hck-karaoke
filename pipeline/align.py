@@ -22,6 +22,17 @@ def main() -> None:
     audio = whisperx.load_audio(args.audio)
     duration = len(audio) / 16000  # whisperx carga el audio a 16kHz
 
+    # Se probó (y se descartó) anclar la alineación a segmentos reales
+    # detectados por VAD/transcripción de Whisper, repartiendo la letra
+    # proporcionalmente entre esos tramos antes de alinear cada uno por
+    # separado. En la práctica, contra audio real ("Stitches"), el reparto
+    # proporcional por cantidad de palabras transcriptas es demasiado frágil:
+    # tramos de VAD desparejos meten palabras de más o de menos en cada
+    # ventana y el error termina siendo peor que el que se buscaba evitar
+    # (llegó a producir un hueco de 32s donde antes no había ninguno). Un solo
+    # bloque para toda la canción, con el idioma correcto (ver ROADMAP.md),
+    # dio resultado limpio de punta a punta — no reintentar esto sin un
+    # method de matching texto-a-texto real (ver nota en ROADMAP.md).
     full_text = " ".join(raw_lines)
     segments = [{"text": full_text, "start": 0.0, "end": duration}]
 
@@ -36,25 +47,46 @@ def main() -> None:
     # de la voz), recortamos su duración en vez de dejarla "colgada" en pantalla.
     MAX_WORD_SECONDS = 2.5
 
-    lines_out = []
+    # Un hueco real entre el fin de una palabra y el inicio de la siguiente
+    # (instrumental, silencio) no puede quedar "adentro" de la misma línea:
+    # si no cortamos acá, la pantalla muestra la frase completa ya desde el
+    # arranque y se queda pegada varios segundos sin que nada coincida con lo
+    # que se está cantando. El umbral coincide con MIN_GAP_SECONDS del lado
+    # del cliente (LyricsView.tsx) — mismo criterio de "esto ya es una pausa
+    # real, no una separación normal entre palabras".
+    MIN_GAP_SECONDS = 1.2
+
+    def close_line(words: list[dict]) -> None:
+        lines_out.append({"start": words[0]["start"], "end": words[-1]["end"], "words": words})
+
+    lines_out: list[dict] = []
     idx = 0
     dropped = 0
     for line in raw_lines:
         words_in_line = line.split()
-        line_words = []
+        current_words: list[dict] = []
         for _ in words_in_line:
             if idx < len(aligned_words):
                 w = aligned_words[idx]
                 if w.get("start") is not None and w.get("end") is not None:
                     start, end = w["start"], w["end"]
-                    if end - start > MAX_WORD_SECONDS:
+                    swallowed_gap = end - start > MAX_WORD_SECONDS
+                    if swallowed_gap:
                         end = start + MAX_WORD_SECONDS
-                    line_words.append({"t": w["word"].strip(), "start": start, "end": end})
+                    elif current_words and start - current_words[-1]["end"] > MIN_GAP_SECONDS:
+                        close_line(current_words)
+                        current_words = []
+                    current_words.append({"t": w["word"].strip(), "start": start, "end": end})
+                    if swallowed_gap:
+                        # la palabra sola ya se comió el hueco: cerramos acá
+                        # también, la próxima palabra arranca línea nueva.
+                        close_line(current_words)
+                        current_words = []
                 else:
                     dropped += 1
             idx += 1
-        if line_words:
-            lines_out.append({"start": line_words[0]["start"], "end": line_words[-1]["end"], "words": line_words})
+        if current_words:
+            close_line(current_words)
 
     with open(args.out, "w", encoding="utf-8") as f:
         json.dump({"lines": lines_out}, f, ensure_ascii=False)

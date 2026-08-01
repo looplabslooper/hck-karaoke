@@ -15,4 +15,27 @@ export interface Song {
   lyricsUrl: string | null
   /** null salvo sourceFormat = 'baked-video'. */
   videoUrl: string | null
+  /** null salvo que se haya sincronizado con la opción "separar voz" (Demucs)
+   * activada — la pista instrumental que dejó ese paso, para apagar la voz
+   * original y cantar sobre la base sola. */
+  instrumentalUrl: string | null
+}
+
+/** 'queued' espera turno, 'playing' es la que está sonando ahora, 'done' ya
+ * se cantó (con o sin puntaje todavía). */
+export type QueueStatus = 'queued' | 'playing' | 'done'
+
+export interface QueueItem {
+  id: string
+  singer: string
+  status: QueueStatus
+  /** null hasta que el operador la puntúa (después de que termina). */
+  score: number | null
+  song: { id: string; title: string; artist: string }
+}
+
+export interface LeaderboardEntry {
+  singer: string
+  totalScore: number
+  songsScored: number
 }

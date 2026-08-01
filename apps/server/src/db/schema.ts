@@ -14,6 +14,7 @@ export const songs = sqliteTable('songs', {
   audioPath: text('audio_path'), // relativo a library/; null solo si playbackMode='complete' y sourceFormat='baked-video'
   lyricsPath: text('lyrics_path'),
   videoPath: text('video_path'), // solo playbackMode = 'complete' con sourceFormat = 'baked-video'
+  instrumentalPath: text('instrumental_path'), // solo si se sincronizó con Demucs (separar voz) — "modo karaoke real"
   createdAt: integer('created_at').notNull(),
 })
 
@@ -21,4 +22,19 @@ export const songs = sqliteTable('songs', {
 export const settings = sqliteTable('settings', {
   key: text('key').primaryKey(),
   value: text('value').notNull(),
+})
+
+/**
+ * Cola en vivo: quién canta qué, en qué orden, y con qué puntaje quedó una
+ * vez cantada. `position` solo ordena los `status='queued'` (arrastrar/subir/
+ * bajar); una vez que pasa a 'playing'/'done' ya no se reordena.
+ */
+export const queueItems = sqliteTable('queue_items', {
+  id: text('id').primaryKey(),
+  songId: text('song_id').notNull(),
+  singer: text('singer').notNull(),
+  status: text('status').notNull(), // 'queued' | 'playing' | 'done'
+  score: integer('score'), // null hasta puntuarla; 1-10
+  position: integer('position').notNull(),
+  createdAt: integer('created_at').notNull(),
 })

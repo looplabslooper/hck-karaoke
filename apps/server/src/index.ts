@@ -6,29 +6,84 @@ import { fileURLToPath } from 'node:url'
 import express from 'express'
 import multer from 'multer'
 import { WebSocketServer, WebSocket } from 'ws'
-import type { ServerMsg } from '@kiosco/shared'
+import type { ServerMsg, LyricsDoc, SyncQuality } from '@kiosco/shared'
 import { detectFormat } from '@kiosco/shared'
 import {
-  listSongs,
+  searchSongs,
+  getSongById,
   getNowPlaying,
   setNowPlaying,
   createSong,
+  updateSongSync,
+  deleteSong,
   getBackgroundVideoUrl,
   setBackgroundVideo,
+  listQueue,
+  listUnscored,
+  addToQueue,
+  removeFromQueue,
+  moveQueueItem,
+  advanceQueue,
+  scoreQueueItem,
+  getLeaderboard,
+  getImportRoots,
+  setImportRoots,
+  listExternalPaths,
+  EXTERNAL_PREFIX,
 } from './db/queries.js'
 import { runAlignment } from './sync/align.js'
 import { transcodeToMp3 } from './sync/transcode.js'
+import { scanFolders, type ImportCandidate } from './import.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const libraryDir = path.resolve(__dirname, '../../../library')
+/** Subcarpeta para las letras de canciones importadas de carpetas externas —
+ * gitignored, a diferencia de las letras de canciones propias. */
+const IMPORTED_DIR = '_imported'
 const port = Number(process.env.PORT ?? 8080)
 
 const app = express()
-app.use(express.json())
+app.use(express.json({ limit: '20mb' }))
 app.get('/health', (_req, res) => res.send('ok'))
 app.use('/library', express.static(libraryDir))
 
-app.get('/api/songs', (_req, res) => res.json(listSongs()))
+// Herramienta de "entrada en vivo" (chroma key + animación de caminata para
+// presentar al próximo cantante) — HTML/JS autocontenido, sin dependencias,
+// se sirve tal cual en vez de portarlo a un componente React.
+app.get('/walk-on', (_req, res) => {
+  res.sendFile(path.resolve(__dirname, '../public/karaoke-walk.html'))
+})
+
+// Paginado/filtrado en SQLite — con catálogos de miles de canciones (ej. un
+// importado legado) no tiene sentido mandar todo de una por HTTP.
+app.get('/api/songs', (req, res) => {
+  const q = typeof req.query.q === 'string' ? req.query.q : undefined
+  const qualityParam = typeof req.query.quality === 'string' ? req.query.quality : undefined
+  const quality =
+    qualityParam && qualityParam !== 'todos' ? (qualityParam as SyncQuality) : undefined
+  const sortDir = req.query.sort === 'desc' ? 'desc' : 'asc'
+  const limit = Math.min(Math.max(Number(req.query.limit) || 60, 1), 500)
+  const offset = Math.max(Number(req.query.offset) || 0, 0)
+  res.json(searchSongs({ q, quality, sortDir, limit, offset }))
+})
+
+app.delete('/api/songs/:id', (req, res) => {
+  const song = getSongById(req.params.id)
+  if (!song) return res.status(404).json({ error: 'song not found' })
+
+  const ok = deleteSong(req.params.id)
+  if (!ok) return res.status(404).json({ error: 'song not found' })
+
+  // Todo lo que subió esta canción (audio/letra/video) vive en su propia
+  // carpeta library/<id>/ — borrarla entera es seguro, nada más la comparte.
+  // Si vino de una importación, su letra vive en library/_imported/<id>/;
+  // `force` hace que la que no exista se ignore sin romper.
+  fs.rmSync(path.join(libraryDir, req.params.id), { recursive: true, force: true })
+  fs.rmSync(path.join(libraryDir, IMPORTED_DIR, req.params.id), { recursive: true, force: true })
+
+  broadcastSnapshot()
+  res.json({ ok: true })
+})
 
 app.post('/api/play/:id', (req, res) => {
   const ok = setNowPlaying(req.params.id)
@@ -36,6 +91,59 @@ app.post('/api/play/:id', (req, res) => {
   broadcastSnapshot()
   res.json({ ok: true })
 })
+
+// --- cola en vivo + puntajes ------------------------------------------------
+
+app.get('/api/queue', (_req, res) => res.json(listQueue()))
+
+app.post('/api/queue', (req, res) => {
+  const songId = req.body.songId as string | undefined
+  const singer = (req.body.singer as string | undefined) ?? ''
+  if (!songId) return res.status(400).json({ error: 'falta songId' })
+  const item = addToQueue(songId, singer)
+  if (!item) return res.status(404).json({ error: 'song not found' })
+  res.json(item)
+})
+
+app.delete('/api/queue/:id', (req, res) => {
+  const ok = removeFromQueue(req.params.id)
+  if (!ok) return res.status(404).json({ error: 'no se pudo quitar (¿ya empezó a cantarse?)' })
+  res.json({ ok: true })
+})
+
+app.post('/api/queue/:id/move', (req, res) => {
+  const direction = req.body.direction as string | undefined
+  if (direction !== 'up' && direction !== 'down') return res.status(400).json({ error: 'direction debe ser up|down' })
+  const ok = moveQueueItem(req.params.id, direction)
+  if (!ok) return res.status(400).json({ error: 'no se pudo mover (¿es el primero/último?)' })
+  res.json({ ok: true })
+})
+
+// Pasa lo que estaba 'playing' a 'done' y sube lo próximo de la cola a
+// 'playing' — y ESE es el que arranca a sonar de verdad (mismo mecanismo que
+// /api/play/:id: nowPlayingId + snapshot por WS).
+app.post('/api/queue/advance', (_req, res) => {
+  const next = advanceQueue()
+  if (next) {
+    setNowPlaying(next.song.id)
+    broadcastSnapshot()
+  }
+  res.json({ next })
+})
+
+app.post('/api/queue/:id/score', (req, res) => {
+  const score = Number(req.body.score)
+  if (!Number.isFinite(score) || score < 1 || score > 10) {
+    return res.status(400).json({ error: 'score debe ser un número entre 1 y 10' })
+  }
+  const ok = scoreQueueItem(req.params.id, score)
+  if (!ok) return res.status(400).json({ error: 'no se pudo puntuar (¿ya terminó de cantarse?)' })
+  res.json({ ok: true })
+})
+
+app.get('/api/queue/unscored', (_req, res) => res.json(listUnscored()))
+
+app.get('/api/leaderboard', (_req, res) => res.json(getLeaderboard()))
 
 // --- subida de canciones -----------------------------------------------
 
@@ -114,6 +222,7 @@ app.post(
       audioPath: audioFile ? `${uploadId}/${audioFile.filename}` : null,
       lyricsPath,
       videoPath: videoFile ? `${uploadId}/${videoFile.filename}` : null,
+      instrumentalPath: null,
     })
 
     res.json({ song, message: detection.message })
@@ -153,8 +262,27 @@ app.post('/api/songs/sync', syncUpload.single('audio'), async (req, res) => {
     fs.rmSync(audioFile.path)
 
     const language = (req.body.language as string | undefined) || 'es'
-    const lyrics = await runAlignment({ audioPath: audioMp3Path, lyricsText, language })
+    const separateVocals = req.body.separateVocals === 'true'
+
+    // Si se separa voz, el instrumental.wav que deja Demucs se transcodea a
+    // mp3 (mismo criterio que el audio principal) y queda como "modo
+    // karaoke real" — apagar la voz original y cantar sobre la base sola.
+    const instrumentalWav = path.join(songDir, 'instrumental.wav')
+    const lyrics = await runAlignment({
+      audioPath: audioMp3Path,
+      lyricsText,
+      language,
+      separateVocals,
+      instrumentalOutputPath: separateVocals ? instrumentalWav : undefined,
+    })
     fs.writeFileSync(path.join(songDir, 'lyrics.json'), JSON.stringify(lyrics))
+
+    let instrumentalPath: string | null = null
+    if (separateVocals && fs.existsSync(instrumentalWav)) {
+      await transcodeToMp3(instrumentalWav, path.join(songDir, 'instrumental.mp3'))
+      fs.rmSync(instrumentalWav)
+      instrumentalPath = `${uploadId}/instrumental.mp3`
+    }
 
     const title = (req.body.title as string | undefined)?.trim() || 'Sin título'
     const artist = (req.body.artist as string | undefined)?.trim() || 'Desconocido'
@@ -169,6 +297,7 @@ app.post('/api/songs/sync', syncUpload.single('audio'), async (req, res) => {
       audioPath: `${uploadId}/audio.mp3`,
       lyricsPath: `${uploadId}/lyrics.json`,
       videoPath: null,
+      instrumentalPath,
     })
 
     const wordCount = lyrics.lines.reduce((n, l) => n + l.words.length, 0)
@@ -177,6 +306,84 @@ app.post('/api/songs/sync', syncUpload.single('audio'), async (req, res) => {
     cleanup()
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) })
   }
+})
+
+// --- re-sincronizar una canción ya cargada ---------------------------------
+// A diferencia de /api/songs/sync, nunca toca el audio: solo corre WhisperX
+// de nuevo contra el archivo que ya está en disco, con letra y/o idioma
+// nuevos. Pensado para el caso real de esta sesión: una canción quedó mal
+// sincronizada (típicamente idioma equivocado) y hace falta corregirla sin
+// perder el ID ni duplicarla en la biblioteca.
+app.post('/api/songs/:id/resync', express.json(), async (req, res) => {
+  const song = getSongById(req.params.id)
+  if (!song) return res.status(404).json({ error: 'song not found' })
+  if (!song.audioUrl) {
+    return res.status(400).json({ error: 'Esta canción no tiene un archivo de audio propio para re-sincronizar.' })
+  }
+
+  const lyricsText = (req.body.lyrics as string | undefined)?.trim()
+  if (!lyricsText) return res.status(400).json({ error: 'Falta pegar la letra.' })
+  const language = (req.body.language as string | undefined) || 'es'
+  const separateVocals = req.body.separateVocals === true
+
+  // audioUrl es "/library/<uploadId>/audio.mp3" (o el nombre original) —
+  // reconstruimos la ruta real en disco a partir de esa misma carpeta.
+  const relativeAudioPath = song.audioUrl.replace(/^\/library\//, '')
+  const audioPath = path.join(libraryDir, relativeAudioPath)
+  if (!fs.existsSync(audioPath)) {
+    return res.status(500).json({ error: `No se encontró el audio en disco (${relativeAudioPath}).` })
+  }
+  const songDir = path.dirname(audioPath)
+
+  try {
+    const instrumentalWav = path.join(songDir, 'instrumental.wav')
+    const lyrics = await runAlignment({
+      audioPath,
+      lyricsText,
+      language,
+      separateVocals,
+      instrumentalOutputPath: separateVocals ? instrumentalWav : undefined,
+    })
+    fs.writeFileSync(path.join(songDir, 'lyrics.json'), JSON.stringify(lyrics))
+
+    const relSongDir = path.relative(libraryDir, songDir).split(path.sep).join('/')
+    const lyricsPath = `${relSongDir}/lyrics.json`
+
+    let instrumentalPath: string | undefined
+    if (separateVocals && fs.existsSync(instrumentalWav)) {
+      await transcodeToMp3(instrumentalWav, path.join(songDir, 'instrumental.mp3'))
+      fs.rmSync(instrumentalWav)
+      instrumentalPath = `${relSongDir}/instrumental.mp3`
+    }
+
+    updateSongSync(song.id, { lyricsPath, sourceFormat: 'auto-sync', syncQuality: 'excellent', instrumentalPath })
+
+    const wordCount = lyrics.lines.reduce((n, l) => n + l.words.length, 0)
+    res.json({ message: `Re-sincronizado: ${lyrics.lines.length} líneas, ${wordCount} palabras.` })
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) })
+  }
+})
+
+// --- corrección manual de sincronía (línea por línea) ----------------------
+// El operador escucha la canción y, cuando nota que una línea (típicamente
+// un coro repetido) quedó desincronizada, la "fija" en la posición real de
+// reproducción — el cliente ya hizo el cálculo de desplazamiento, acá solo
+// se persiste el JSON corregido tal cual llega.
+app.put('/api/songs/:id/lyrics', express.json({ limit: '2mb' }), (req, res) => {
+  const song = getSongById(req.params.id)
+  if (!song || !song.lyricsUrl) {
+    return res.status(404).json({ error: 'Esta canción no tiene letra propia para corregir.' })
+  }
+
+  const lyrics = req.body as LyricsDoc
+  if (!lyrics || !Array.isArray(lyrics.lines)) {
+    return res.status(400).json({ error: 'El cuerpo tiene que ser un LyricsDoc válido ({ lines: [...] }).' })
+  }
+
+  const relativeLyricsPath = song.lyricsUrl.replace(/^\/library\//, '')
+  fs.writeFileSync(path.join(libraryDir, relativeLyricsPath), JSON.stringify(lyrics))
+  res.json({ ok: true })
 })
 
 // --- fondo de video global -----------------------------------------------
@@ -199,6 +406,132 @@ app.post('/api/settings/background-video', backgroundUpload.single('video'), (re
   res.json({ ok: true })
 })
 
+// --- importar carpetas externas --------------------------------------------
+// Bibliotecas de karaoke ya armadas (audio + letra, o video quemado) pueden
+// vivir en cualquier carpeta del disco — nunca se copian a library/ (podrían
+// ser cientos de GB). Solo se copia la letra normalizada (texto, chico); el
+// audio/video se sirve al vuelo desde su ubicación original vía
+// /api/external-file, validado contra las carpetas configuradas acá.
+
+app.get('/api/import/roots', (_req, res) => res.json(getImportRoots()))
+
+app.post('/api/import/roots', express.json(), (req, res) => {
+  const roots = req.body.roots as unknown
+  if (!Array.isArray(roots) || !roots.every((r) => typeof r === 'string')) {
+    return res.status(400).json({ error: 'roots debe ser un array de strings' })
+  }
+  const normalized = roots.map((r) => path.resolve(r)).filter((r) => fs.existsSync(r))
+  setImportRoots(normalized)
+  res.json({ roots: normalized })
+})
+
+app.post('/api/import/scan', (_req, res) => {
+  const roots = getImportRoots()
+  const candidates = scanFolders(roots, listExternalPaths())
+  res.json({ candidates })
+})
+
+app.post('/api/import/run', express.json({ limit: '10mb' }), (req, res) => {
+  const candidates = req.body.candidates as ImportCandidate[] | undefined
+  if (!Array.isArray(candidates)) return res.status(400).json({ error: 'falta candidates' })
+
+  const imported: string[] = []
+  const failed: { key: string; reason: string }[] = []
+
+  for (const candidate of candidates) {
+    if (!candidate.detection.ok) {
+      failed.push({ key: candidate.key, reason: candidate.detection.reason })
+      continue
+    }
+    const detection = candidate.detection
+    const id = crypto.randomUUID()
+
+    let lyricsPath: string | null = null
+    if (detection.lyrics) {
+      // Letra normalizada (json/lrc-*): se copia como texto, no pesa nada.
+      // Va bajo _imported/ y no en library/<id>/ como las canciones propias:
+      // un catálogo importado puede traer miles de letras que no son del
+      // usuario (típicamente de un producto comercial), y `library/_imported/`
+      // está gitignored justo para que no terminen versionadas. Ver CLAUDE.md.
+      fs.mkdirSync(path.join(libraryDir, IMPORTED_DIR, id), { recursive: true })
+      fs.writeFileSync(path.join(libraryDir, IMPORTED_DIR, id, 'lyrics.json'), JSON.stringify(detection.lyrics))
+      lyricsPath = `${IMPORTED_DIR}/${id}/lyrics.json`
+    } else if (detection.sourceFormat === 'cdg' && candidate.lyricsPath) {
+      lyricsPath = `${EXTERNAL_PREFIX}${candidate.lyricsPath}`
+    }
+
+    createSong({
+      id,
+      title: candidate.title,
+      artist: candidate.artist,
+      playbackMode: detection.playbackMode,
+      sourceFormat: detection.sourceFormat,
+      syncQuality: detection.syncQuality,
+      audioPath: candidate.audioPath ? `${EXTERNAL_PREFIX}${candidate.audioPath}` : null,
+      lyricsPath,
+      videoPath: candidate.videoPath ? `${EXTERNAL_PREFIX}${candidate.videoPath}` : null,
+      instrumentalPath: null,
+    })
+    imported.push(candidate.key)
+  }
+
+  broadcastSnapshot()
+  res.json({ imported: imported.length, failed })
+})
+
+function isWithinRoot(absPath: string, root: string): boolean {
+  const a = process.platform === 'win32' ? absPath.toLowerCase() : absPath
+  const b = process.platform === 'win32' ? root.toLowerCase() : root
+  return a === b || a.startsWith(b + path.sep)
+}
+
+app.get('/api/external-file', (req, res) => {
+  const rawPath = req.query.path
+  if (typeof rawPath !== 'string') return res.status(400).json({ error: 'falta path' })
+
+  const absPath = path.resolve(rawPath)
+  const roots = getImportRoots()
+  const allowed = roots.some((root) => isWithinRoot(absPath, root))
+  if (!allowed) return res.status(403).json({ error: 'path fuera de las carpetas de importación configuradas' })
+  if (!fs.existsSync(absPath)) return res.status(404).json({ error: 'archivo no encontrado' })
+
+  res.sendFile(absPath)
+})
+
+// --- frontend en producción ------------------------------------------------
+// En dev, `apps/admin` corre su propio Vite (:5174) con proxy hacia acá. Para
+// el kiosco empaquetado no hay Vite corriendo — este mismo proceso sirve el
+// build ya generado (`pnpm --filter @kiosco/admin build`) para que todo viva
+// en un solo origen (:8080). Va al final, después de /api y /library, para
+// que nunca les gane el paso a esas rutas.
+// En dev NO se sirve el build: `apps/admin/dist` casi siempre está viejo
+// respecto del código, y servirlo acá es una trampa silenciosa — la app
+// carga y parece andar, pero es una versión de hace días que puede estar
+// hablando con una API que ya cambió (pasó de verdad: un build viejo hacía
+// `.find()` sobre /api/songs después de que el endpoint pasara a devolver
+// `{items,total}`). Mejor un cartel explícito que un bug fantasma.
+// `npm_lifecycle_event` lo setea pnpm con el nombre del script que se corrió
+// ('dev' o 'start') — evita depender de cross-env, que no está instalado y
+// haría falta en Windows para pasar una env var inline.
+const adminDistDir = path.resolve(__dirname, '../../admin/dist')
+if (process.env.npm_lifecycle_event === 'dev') {
+  app.get('*', (_req, res) => {
+    res
+      .status(503)
+      .type('html')
+      .send(
+        `<body style="font:16px system-ui;background:#0f1115;color:#e8e6f0;padding:3rem;line-height:1.6">
+         <h1 style="color:#a78bfa">Modo desarrollo</h1>
+         <p>Este puerto (:8080) sirve solo la API y <code>/library</code>.</p>
+         <p>La interfaz corre en <a style="color:#a78bfa" href="http://localhost:5174/">http://localhost:5174/</a> (Vite, con hot reload).</p>
+         <p style="color:#8b8a99">Para probar el kiosco tal cual se ve en producción: <code>pnpm build && pnpm start</code>.</p>
+         </body>`,
+      )
+  })
+} else if (fs.existsSync(adminDistDir)) {
+  app.use(express.static(adminDistDir))
+}
+
 // --- websocket -------------------------------------------------------------
 
 const httpServer = createServer(app)
@@ -217,14 +550,6 @@ function broadcastSnapshot() {
 
 wss.on('connection', (socket) => {
   socket.send(JSON.stringify(currentSnapshot()))
-
-  // 'control' (admin -> pantalla) y 'playback-status' (pantalla -> admin) son
-  // retransmisión pura: el servidor no interpreta ni guarda ese estado.
-  socket.on('message', (raw) => {
-    for (const client of wss.clients) {
-      if (client !== socket && client.readyState === WebSocket.OPEN) client.send(raw.toString())
-    }
-  })
 })
 
 httpServer.listen(port, () => {

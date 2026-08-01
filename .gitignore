@@ -10,9 +10,14 @@ dist/
 
 # contenido pesado / referencia (no se versiona)
 /old/
+/repertorio/
 library/**/*.mp3
 library/**/*.wav
 library/**/*.opus
+# Letras de canciones importadas de carpetas externas (catálogos de terceros,
+# pueden ser miles). Las letras de canciones *propias* sí se versionan, y por
+# eso viven en library/<id>/ y no acá — ver CLAUDE.md.
+library/_imported/
 
 # base de datos local (se recrea con migraciones + seed)
 /data/
