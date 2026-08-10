@@ -10,6 +10,7 @@ import type { ServerMsg, LyricsDoc, SyncQuality } from '@kiosco/shared'
 import { detectFormat } from '@kiosco/shared'
 import {
   searchSongs,
+  getRandomSongs,
   getSongById,
   getNowPlaying,
   setNowPlaying,
@@ -100,6 +101,12 @@ app.get('/api/songs', (req, res) => {
   const verified =
     req.query.verified === 'true' ? true : req.query.verified === 'false' ? false : undefined
   res.json(searchSongs({ q, quality, verified, sortDir, limit, offset }))
+})
+
+// Muestra al azar para la página de Inicio.
+app.get('/api/songs/random', (req, res) => {
+  const limit = Math.min(Math.max(Number(req.query.limit) || 10, 1), 50)
+  res.json(getRandomSongs(limit))
 })
 
 // Marca/desmarca "escuché esta canción y la letra va sincronizada".

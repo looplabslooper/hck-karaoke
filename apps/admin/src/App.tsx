@@ -69,7 +69,17 @@ function usesWebAudioEngine(song: Song): boolean {
   return song.playbackMode === 'overlay' || song.sourceFormat === 'cdg'
 }
 
-type Page = 'biblioteca' | 'playlists' | 'cola' | 'generar' | 'subir' | 'fondo' | 'importar'
+type Page =
+  | 'inicio'
+  | 'biblioteca'
+  | 'playlists'
+  | 'cola'
+  | 'studio'
+  | 'generar'
+  | 'subir'
+  | 'fondo'
+  | 'configuracion'
+  | 'importar'
 type WizardStep = 1 | 2 | 3 | 4
 
 interface ImportCandidate {
@@ -82,7 +92,20 @@ interface ImportCandidate {
   detection: { ok: true; message: string } | { ok: false; reason: string }
 }
 
+// Playlists queda fuera de la nav por ahora (a pedido explícito, "después
+// refinamos esto") — el código/página sigue vivo, solo no hay forma de
+// llegar ahí desde la UI todavía.
 const NAV_ITEMS: { id: Page; label: string; icon: JSX.Element }[] = [
+  {
+    id: 'inicio',
+    label: 'Inicio',
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <path d="M3 11l9-8 9 8" />
+        <path d="M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9" />
+      </svg>
+    ),
+  },
   {
     id: 'biblioteca',
     label: 'Biblioteca de canciones',
@@ -94,19 +117,8 @@ const NAV_ITEMS: { id: Page; label: string; icon: JSX.Element }[] = [
     ),
   },
   {
-    id: 'playlists',
-    label: 'Playlists',
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-        <path d="M4 6h11M4 11h11M4 16h7" />
-        <circle cx="18" cy="16" r="3" />
-        <path d="M21 16V8l-3 1" />
-      </svg>
-    ),
-  },
-  {
     id: 'cola',
-    label: 'Cola en vivo',
+    label: 'Sesión de Karaoke',
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
         <path d="M4 6h16M4 12h10M4 18h16" />
@@ -115,40 +127,24 @@ const NAV_ITEMS: { id: Page; label: string; icon: JSX.Element }[] = [
     ),
   },
   {
-    id: 'generar',
-    label: 'Agregar canción nueva',
+    id: 'studio',
+    label: 'Studio',
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-        <path d="M3 12h4l2-7 4 14 2-7h6" />
+        <rect x="3" y="3" width="7" height="7" rx="1.5" />
+        <rect x="14" y="3" width="7" height="7" rx="1.5" />
+        <rect x="3" y="14" width="7" height="7" rx="1.5" />
+        <rect x="14" y="14" width="7" height="7" rx="1.5" />
       </svg>
     ),
   },
   {
-    id: 'subir',
-    label: 'Subir canción armada',
+    id: 'configuracion',
+    label: 'Configuración',
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-        <path d="M12 16V4M7 9l5-5 5 5" />
-        <path d="M4 20h16" />
-      </svg>
-    ),
-  },
-  {
-    id: 'fondo',
-    label: 'Fondo de video',
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-        <rect x="3" y="4" width="18" height="14" rx="1.5" />
-        <path d="M3 15l5-5 4 4 4-5 5 6" />
-      </svg>
-    ),
-  },
-  {
-    id: 'importar',
-    label: 'Importar carpetas',
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-        <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
+        <circle cx="12" cy="12" r="3.2" />
+        <path d="M12 4v2.4M12 17.6V20M4 12h2.4M17.6 12H20M6.3 6.3l1.7 1.7M16 16l1.7 1.7M17.7 6.3 16 8M8 16l-1.7 1.7" />
       </svg>
     ),
   },
@@ -164,7 +160,7 @@ const LANGUAGE_OPTIONS: { value: string; label: string }[] = [
 ]
 
 export function App() {
-  const [page, setPage] = useState<Page>('biblioteca')
+  const [page, setPage] = useState<Page>('inicio')
   const [songs, setSongs] = useState<Song[]>([])
   const [uploadMessage, setUploadMessage] = useState<string | null>(null)
   const [uploadError, setUploadError] = useState<string | null>(null)
@@ -184,6 +180,9 @@ export function App() {
   const [nowPlayingSong, setNowPlayingSong] = useState<Song | null>(null)
   const [playError, setPlayError] = useState<string | null>(null)
   const [backgroundVideoUrl, setBackgroundVideoUrl] = useState<string | null>(null)
+
+  // Inicio: muestra al azar del catálogo, para invitar a explorar.
+  const [randomSongs, setRandomSongs] = useState<Song[]>([])
 
   // Biblioteca: búsqueda + filtro por calidad de sincronía + orden + paginado
   // server-side — con catálogos de miles de canciones (ej. un importado
@@ -309,6 +308,11 @@ export function App() {
     params.set('limit', String(SONGS_PAGE_SIZE))
     params.set('offset', String(offset))
     return params.toString()
+  }
+
+  async function refreshRandomSongs() {
+    const res = await fetch('/api/songs/random?limit=10')
+    setRandomSongs(await res.json())
   }
 
   /** Vuelve a pedir la primera página con los filtros actuales — se usa al
@@ -459,6 +463,7 @@ export function App() {
     refreshPlaylists()
     refreshSession()
     refreshTemplates()
+    refreshRandomSongs()
 
     const ws = new WebSocket(`ws://${location.hostname}:8080/ws`)
     wsRef.current = ws
@@ -1232,20 +1237,6 @@ export function App() {
               {item.label}
             </button>
           ))}
-          <button className="nav-btn" onClick={() => window.location.assign('/walk-on')}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-              <circle cx="12" cy="5" r="2.4" />
-              <path d="M12 8v6l-3 7M12 14l3 7M8 11l4-2 4 2" />
-            </svg>
-            Entrada en vivo
-          </button>
-          <button className="nav-btn" onClick={() => window.location.assign('/template-editor')}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-              <ellipse cx="12" cy="12" rx="6" ry="8" />
-              <path d="M4 6l3 2M20 6l-3 2M4 18l3-2M20 18l-3-2" />
-            </svg>
-            Editor de templates
-          </button>
         </nav>
 
         <div className="session-box">
@@ -1274,6 +1265,59 @@ export function App() {
       </aside>
 
       <main className="stage">
+        <section className={`page${page === 'inicio' ? ' active' : ''}`}>
+          <div className="stage-head">
+            <div>
+              <h1>HCK · High Class Karaoke</h1>
+              <p>Donde el que canta, brilla. Una selección al azar para arrancar.</p>
+            </div>
+            <button className="btn-primary" onClick={() => setPage('biblioteca')}>
+              Ver toda la biblioteca
+            </button>
+          </div>
+
+          <div className="library-table">
+            <div className="library-row library-row--head">
+              <div>Canción</div>
+              <div>Artista</div>
+              <div>Formato</div>
+              <div>Calidad</div>
+              <div />
+            </div>
+            {randomSongs.map((s) => {
+              const isPlaying = s.id === nowPlayingSong?.id
+              return (
+                <div key={s.id} className={`library-row${isPlaying ? ' is-playing' : ''}`}>
+                  <div className="song-cell">
+                    <div className="song-swatch" style={{ background: songColor(s.id) }} />
+                    {s.title}
+                  </div>
+                  <div className="dim-cell">{s.artist}</div>
+                  <div className="dim-cell">{FORMAT_LABEL[s.sourceFormat]}</div>
+                  <div>
+                    <span className="badge" style={{ ['--quality-color' as string]: QUALITY_COLOR[s.syncQuality] }}>
+                      {QUALITY_LABEL[s.syncQuality]}
+                    </span>
+                  </div>
+                  <div className="row-actions">
+                    <button className="row-play-btn" onClick={() => handlePlay(s.id)} disabled={isPlaying}>
+                      {isPlaying ? 'Reproduciendo' : '▶ Reproducir'}
+                    </button>
+                    <button
+                      className="row-queue-btn"
+                      onClick={() => openAddToQueue(s)}
+                      disabled={!session}
+                      title={session ? 'Agregar a la cola' : 'Iniciá una sesión primero'}
+                    >
+                      + Cola
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </section>
+
         <section className={`page${page === 'biblioteca' ? ' active' : ''}`}>
           <div className="stage-head">
             <div>
@@ -1636,6 +1680,37 @@ export function App() {
           </div>
         </section>
 
+        <section className={`page${page === 'studio' ? ' active' : ''}`}>
+          <div className="stage-head">
+            <div>
+              <h1>Studio</h1>
+              <p>Herramientas para armar y curar el material del kiosco.</p>
+            </div>
+          </div>
+          <div className="playlist-grid">
+            <div className="playlist-card hub-card" onClick={() => setPage('generar')}>
+              <div className="playlist-name">Crear canción en la biblioteca</div>
+              <p className="hint">Subís audio + letra pegada y se sincroniza sola con WhisperX.</p>
+            </div>
+            <div className="playlist-card hub-card" onClick={() => setPage('subir')}>
+              <div className="playlist-name">Subir canción a la biblioteca</div>
+              <p className="hint">Para karaoke ya armado — LRC, JSON propio, CD+G o video con letra quemada.</p>
+            </div>
+            <div className="playlist-card hub-card" onClick={() => setPage('fondo')}>
+              <div className="playlist-name">Galería de fondos</div>
+              <p className="hint">El video de fondo detrás de la letra en pantalla completa.</p>
+            </div>
+            <div className="playlist-card hub-card" onClick={() => window.location.assign('/template-editor')}>
+              <div className="playlist-name">Editor de templates</div>
+              <p className="hint">Marcá a mano el "slot" de cara sobre un video para el pack de animaciones.</p>
+            </div>
+            <div className="playlist-card hub-card" onClick={() => window.location.assign('/walk-on')}>
+              <div className="playlist-name">Entrada en vivo</div>
+              <p className="hint">Animación de caminata para presentar al próximo cantante.</p>
+            </div>
+          </div>
+        </section>
+
         <section className={`page${page === 'generar' ? ' active' : ''}`}>
           <div className="stage-head">
             <div>
@@ -1832,7 +1907,7 @@ export function App() {
         <section className={`page${page === 'fondo' ? ' active' : ''}`}>
           <div className="stage-head">
             <div>
-              <h1>Fondo de video</h1>
+              <h1>Galería de fondos</h1>
               <p>El clip detrás de la letra en la pantalla grande. La letra siempre queda encima, elijas el que elijas.</p>
             </div>
           </div>
@@ -1847,6 +1922,22 @@ export function App() {
               </button>
             </form>
             {backgroundMessage && <p className="ok">{backgroundMessage}</p>}
+          </div>
+        </section>
+
+        <section className={`page${page === 'configuracion' ? ' active' : ''}`}>
+          <div className="stage-head">
+            <div>
+              <h1>Configuración</h1>
+              <p>Ajustes generales del kiosco.</p>
+            </div>
+          </div>
+          <h2 className="config-section-title">Configuración general</h2>
+          <div className="playlist-grid">
+            <div className="playlist-card hub-card" onClick={() => setPage('importar')}>
+              <div className="playlist-name">Importar carpetas</div>
+              <p className="hint">Carpetas del disco con karaokes ya armados, sin copiar los archivos pesados.</p>
+            </div>
           </div>
         </section>
 

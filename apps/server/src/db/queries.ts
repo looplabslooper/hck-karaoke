@@ -56,6 +56,12 @@ export function listSongs(): Song[] {
   return db.select().from(songs).all().map(toWireSong)
 }
 
+/** Para la página de Inicio: una muestra al azar del catálogo, distinta en
+ * cada carga — invita a explorar en vez de mostrar siempre lo mismo. */
+export function getRandomSongs(limit: number): Song[] {
+  return db.select().from(songs).orderBy(sql`RANDOM()`).limit(limit).all().map(toWireSong)
+}
+
 export interface SongSearchParams {
   q?: string
   quality?: SyncQuality

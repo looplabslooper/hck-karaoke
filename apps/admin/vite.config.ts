@@ -16,6 +16,14 @@ export default defineConfig({
     proxy: {
       '/api': 'http://localhost:8080',
       '/library': 'http://localhost:8080',
+      '/templates': 'http://localhost:8080',
+      // Herramientas standalone (HTML suelto, sin dependencias) que solo
+      // existen en el server — sin este proxy, en dev (:5174) Vite no las
+      // conoce y cae al fallback de la SPA, que reaparece en la página por
+      // defecto en vez de la herramienta. En producción esto no pasa
+      // porque todo se sirve del mismo origen (:8080).
+      '/walk-on': 'http://localhost:8080',
+      '/template-editor': 'http://localhost:8080',
     },
   },
 })
