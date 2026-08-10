@@ -1,0 +1,1 @@
+ALTER TABLE `queue_items` ADD `singer_id` text NOT NULL;

@@ -13,8 +13,10 @@ import {
   getSongById,
   getNowPlaying,
   setNowPlaying,
+  clearNowPlaying,
   createSong,
   updateSongSync,
+  setSyncVerified,
   deleteSong,
   getBackgroundVideoUrl,
   setBackgroundVideo,
@@ -38,28 +40,51 @@ import {
   addSongToPlaylist,
   removeSongFromPlaylist,
   addPlaylistToQueue,
+  getActiveSession,
+  createSession,
+  endSession,
+  listSessionSingers,
+  createSinger,
 } from './db/queries.js'
 import { runAlignment } from './sync/align.js'
 import { transcodeToMp3 } from './sync/transcode.js'
 import { scanFolders, type ImportCandidate } from './import.js'
+import { listTemplates } from './templates.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const libraryDir = path.resolve(__dirname, '../../../library')
 /** Subcarpeta para las letras de canciones importadas de carpetas externas —
  * gitignored, a diferencia de las letras de canciones propias. */
 const IMPORTED_DIR = '_imported'
+/** Fotos de cantantes de la sesión activa — library/_sessions/<sessionId>/,
+ * mismo patrón underscore que _background/_imported. Se borra entera al
+ * terminar la sesión (ver /api/sessions/end). */
+const SESSIONS_DIR = '_sessions'
+/** Pack de templates (video.mp4 + transform.json por carpeta) — hermana de
+ * library/, gitignored, el operador la puebla a mano. Ver
+ * .claude/agents/director-escenas.md y pipeline/track_color.py. */
+const templatesDir = path.resolve(__dirname, '../../../templates')
 const port = Number(process.env.PORT ?? 8080)
 
 const app = express()
 app.use(express.json({ limit: '20mb' }))
 app.get('/health', (_req, res) => res.send('ok'))
 app.use('/library', express.static(libraryDir))
+app.use('/templates', express.static(templatesDir))
 
 // Herramienta de "entrada en vivo" (chroma key + animación de caminata para
 // presentar al próximo cantante) — HTML/JS autocontenido, sin dependencias,
 // se sirve tal cual en vez de portarlo a un componente React.
 app.get('/walk-on', (_req, res) => {
   res.sendFile(path.resolve(__dirname, '../public/karaoke-walk.html'))
+})
+
+// Editor de templates: arma a mano la curva de posición/ángulo/escala del
+// "slot" de cara sobre un video (transform.json), en vez de extraerla
+// trackeando la cara de quien sale en el video — ver .claude/agents/director-escenas.md
+// para el porqué. Mismo criterio que /walk-on: HTML/JS autocontenido.
+app.get('/template-editor', (_req, res) => {
+  res.sendFile(path.resolve(__dirname, '../public/template-editor.html'))
 })
 
 // Paginado/filtrado en SQLite — con catálogos de miles de canciones (ej. un
@@ -72,7 +97,16 @@ app.get('/api/songs', (req, res) => {
   const sortDir = req.query.sort === 'desc' ? 'desc' : 'asc'
   const limit = Math.min(Math.max(Number(req.query.limit) || 60, 1), 500)
   const offset = Math.max(Number(req.query.offset) || 0, 0)
-  res.json(searchSongs({ q, quality, sortDir, limit, offset }))
+  const verified =
+    req.query.verified === 'true' ? true : req.query.verified === 'false' ? false : undefined
+  res.json(searchSongs({ q, quality, verified, sortDir, limit, offset }))
+})
+
+// Marca/desmarca "escuché esta canción y la letra va sincronizada".
+app.post('/api/songs/:id/sync-verified', (req, res) => {
+  const verified = req.body.verified === true
+  if (!setSyncVerified(req.params.id, verified)) return res.status(404).json({ error: 'song not found' })
+  res.json({ ok: true })
 })
 
 app.delete('/api/songs/:id', (req, res) => {
@@ -100,16 +134,83 @@ app.post('/api/play/:id', (req, res) => {
   res.json({ ok: true })
 })
 
+// --- sesión y cantantes ------------------------------------------------
+// Ver ROADMAP.md: agrupa cantantes+fotos+cola+puntajes, como mucho una
+// sesión activa a la vez, efímera — terminarla borra todo.
+
+app.get('/api/sessions/current', (_req, res) => {
+  const session = getActiveSession()
+  res.json({ session, singers: session ? listSessionSingers(session.id) : [] })
+})
+
+// Si ya había una sesión activa, la termina (borra DB + fotos en disco)
+// antes de arrancar la nueva — mismo resultado que terminar-y-arrancar,
+// un click menos para el operador.
+app.post('/api/sessions/start', (_req, res) => {
+  const previous = getActiveSession()
+  if (previous) {
+    endSession(previous.id)
+    fs.rmSync(path.join(libraryDir, SESSIONS_DIR, previous.id), { recursive: true, force: true })
+  }
+  const session = createSession()
+  broadcastSnapshot()
+  res.json(session)
+})
+
+app.post('/api/sessions/end', (_req, res) => {
+  const active = getActiveSession()
+  if (!active) return res.status(400).json({ error: 'no hay sesión activa' })
+  endSession(active.id)
+  fs.rmSync(path.join(libraryDir, SESSIONS_DIR, active.id), { recursive: true, force: true })
+  broadcastSnapshot()
+  res.json({ ok: true })
+})
+
+app.get('/api/singers', (_req, res) => {
+  const session = getActiveSession()
+  res.json(session ? listSessionSingers(session.id) : [])
+})
+
+function requireActiveSession(_req: express.Request, res: express.Response, next: express.NextFunction) {
+  if (!getActiveSession()) return res.status(400).json({ error: 'no hay sesión activa' })
+  next()
+}
+
+const singerUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => {
+      // requireActiveSession ya corrió antes que este middleware, así que
+      // acá siempre hay una sesión activa.
+      const session = getActiveSession()!
+      const dir = path.join(libraryDir, SESSIONS_DIR, session.id)
+      fs.mkdirSync(dir, { recursive: true })
+      cb(null, dir)
+    },
+    filename: (_req, file, cb) => cb(null, `${crypto.randomUUID()}${path.extname(file.originalname) || '.jpg'}`),
+  }),
+})
+
+app.post('/api/singers', requireActiveSession, singerUpload.single('photo'), (req, res) => {
+  const session = getActiveSession()!
+  const name = (req.body.name as string | undefined) ?? ''
+  const photoPath = req.file ? `${SESSIONS_DIR}/${session.id}/${req.file.filename}` : null
+  res.json(createSinger(session.id, name, photoPath))
+})
+
+// --- templates (animación de cara en el escenario) ----------------------
+
+app.get('/api/templates', (_req, res) => res.json(listTemplates(templatesDir)))
+
 // --- cola en vivo + puntajes ------------------------------------------------
 
 app.get('/api/queue', (_req, res) => res.json(listQueue()))
 
 app.post('/api/queue', (req, res) => {
   const songId = req.body.songId as string | undefined
-  const singer = (req.body.singer as string | undefined) ?? ''
-  if (!songId) return res.status(400).json({ error: 'falta songId' })
-  const item = addToQueue(songId, singer)
-  if (!item) return res.status(404).json({ error: 'song not found' })
+  const singerId = req.body.singerId as string | undefined
+  if (!songId || !singerId) return res.status(400).json({ error: 'falta songId o singerId' })
+  const item = addToQueue(songId, singerId)
+  if (!item) return res.status(404).json({ error: 'song o singer not found' })
   res.json(item)
 })
 
@@ -198,11 +299,12 @@ app.delete('/api/playlists/:id/songs/:songId', (req, res) => {
 })
 
 // Empuja la playlist entera al final de la cola en vivo — el atajo para no
-// cargar 20 canciones a mano al arrancar la noche.
+// cargar 20 canciones a mano al arrancar la noche. singerId ausente cae en
+// el sentinel "Sin asignar" de la sesión activa (ver addPlaylistToQueue).
 app.post('/api/playlists/:id/add-to-queue', (req, res) => {
-  const singer = (req.body.singer as string | undefined) ?? ''
-  const added = addPlaylistToQueue(req.params.id, singer)
-  if (added === 0) return res.status(404).json({ error: 'playlist vacía o inexistente' })
+  const singerId = (req.body.singerId as string | undefined) ?? null
+  const added = addPlaylistToQueue(req.params.id, singerId)
+  if (added === 0) return res.status(404).json({ error: 'playlist vacía/inexistente, o no hay sesión activa' })
   res.json({ added })
 })
 
@@ -612,6 +714,11 @@ function broadcastSnapshot() {
 wss.on('connection', (socket) => {
   socket.send(JSON.stringify(currentSnapshot()))
 })
+
+// Arranque limpio: el kiosco empieza sin nada sonando. `nowPlayingId` es
+// persistente, así que sin esto una sesión nueva levanta mostrando la última
+// canción de la anterior.
+clearNowPlaying()
 
 httpServer.listen(port, () => {
   console.log(`[server] http://localhost:${port} (health, /library, /api/songs, /api/play/:id, ws:/ws)`)

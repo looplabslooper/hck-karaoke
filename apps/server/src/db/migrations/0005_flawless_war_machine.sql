@@ -1,0 +1,1 @@
+ALTER TABLE `songs` ADD `sync_verified` integer DEFAULT 0 NOT NULL;

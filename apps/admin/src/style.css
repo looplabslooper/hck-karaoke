@@ -120,6 +120,20 @@ h2 {
   z-index: 0;
 }
 
+/* Overlay transitorio de "cara en el escenario" (atajo T en pantalla
+   completa) — por encima de todo, incluido .baked-video-stage (60) y
+   .modal-backdrop (700). */
+.face-swap-overlay video {
+  display: none;
+}
+
+.face-swap-overlay canvas {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  pointer-events: none;
+}
+
 /* ---------- Playlists ---------- */
 
 .playlist-grid {
@@ -603,6 +617,119 @@ nav {
   opacity: 0.85;
 }
 
+.session-box {
+  margin-top: auto;
+  padding: 0.85rem 0.9rem;
+  border-radius: var(--radius-sm);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.session-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.session-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  flex-shrink: 0;
+}
+
+.session-dot.active {
+  background: var(--success);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* --- SingerPicker --------------------------------------------------- */
+
+.singer-picker-input-wrap {
+  position: relative;
+}
+
+.singer-suggestions {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 10;
+  margin: 0;
+  padding: 0.35rem;
+  list-style: none;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  max-height: 220px;
+  overflow-y: auto;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.singer-suggestions li {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.45rem 0.5rem;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.88rem;
+}
+
+.singer-suggestions li:hover {
+  background: var(--surface3);
+}
+
+.singer-suggestions img,
+.singer-suggestion-noPhoto {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+  background: var(--surface3);
+}
+
+.singer-photo-field {
+  margin-top: 0.75rem;
+}
+
+.singer-photo-actions,
+.singer-camera-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.singer-camera video {
+  width: 100%;
+  max-width: 280px;
+  border-radius: var(--radius-sm);
+  background: #000;
+  margin-bottom: 0.5rem;
+  transform: scaleX(-1); /* espejado, como mirarse a un espejo */
+}
+
+.singer-photo-preview {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.singer-photo-preview img {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid var(--border);
+}
+
 .nav-btn:hover {
   background: var(--surface2);
   color: var(--text);
@@ -891,6 +1018,36 @@ nav {
 
 .row-delete-btn:hover {
   opacity: 1;
+}
+
+/* Marca de "escuché esta canción y la letra va sincronizada" — apagada por
+   defecto, verde cuando está confirmada. */
+.row-verify-btn {
+  all: unset;
+  cursor: pointer;
+  font-size: 0.8rem;
+  line-height: 1;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
+.row-verify-btn:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.row-verify-btn.is-verified {
+  background: #22c55e;
+  border-color: #22c55e;
+  color: #0f1115;
+  font-weight: 700;
 }
 
 .modal-backdrop {
@@ -1480,9 +1637,27 @@ nav {
 }
 
 .queue-now-singer {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
   font-size: 1.25rem;
   font-weight: 800;
   margin-top: 0.3rem;
+}
+
+/* Miniatura de la foto del cantante — cola, "cantando ahora" y leaderboard. */
+.singer-thumb {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+}
+
+.queue-now-singer .singer-thumb {
+  width: 32px;
+  height: 32px;
 }
 
 .queue-now-song {
@@ -1551,6 +1726,9 @@ nav {
 }
 
 .queue-row-singer {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
   font-weight: 700;
   font-size: 0.88rem;
 }
@@ -1675,6 +1853,9 @@ nav {
 
 .leaderboard-singer {
   flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
   font-weight: 700;
   font-size: 0.9rem;
 }

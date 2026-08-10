@@ -6,10 +6,15 @@ import type {
   PlaylistDetail,
   QueueItem,
   ServerMsg,
+  Session,
+  Singer,
   Song,
+  Template,
 } from '@kiosco/shared'
 import { LyricsView } from './LyricsView'
 import { CdgPlayer } from './CdgPlayer'
+import { SingerPicker } from './SingerPicker'
+import { FaceSwapOverlay } from './FaceSwapOverlay'
 
 // Kiosco de karaoke de una sola pantalla: navegación/biblioteca y el motor
 // de audio real (Web Audio) conviven en esta misma app — ver ROADMAP.md.
@@ -186,6 +191,9 @@ export function App() {
   const SONGS_PAGE_SIZE = 60
   const [searchQuery, setSearchQuery] = useState('')
   const [qualityFilter, setQualityFilter] = useState<Song['syncQuality'] | 'todos'>('todos')
+  // 'todos' | 'si' | 'no' — para curar un pack chico de canciones con la
+  // sincronía ya confirmada a oído, y probar cambios contra ese pack.
+  const [verifiedFilter, setVerifiedFilter] = useState<'todos' | 'si' | 'no'>('todos')
   const [sortAsc, setSortAsc] = useState(true)
   const [songsTotal, setSongsTotal] = useState(0)
   const [songsLoading, setSongsLoading] = useState(false)
@@ -208,15 +216,25 @@ export function App() {
   const [newPlaylistName, setNewPlaylistName] = useState('')
   const [addToPlaylistSong, setAddToPlaylistSong] = useState<Song | null>(null)
   const [pushPlaylist, setPushPlaylist] = useState<Playlist | null>(null)
-  const [pushSinger, setPushSinger] = useState('')
+  const [pushSingerId, setPushSingerId] = useState<string | null>(null)
+  const [pushSingerName, setPushSingerName] = useState('')
+  const [pushSingerPhoto, setPushSingerPhoto] = useState<Blob | null>(null)
   const [playlistMessage, setPlaylistMessage] = useState<string | null>(null)
+
+  // Sesión de karaoke: agrupa cantantes+fotos+cola+puntajes, como mucho una
+  // activa a la vez, efímera — ver ROADMAP.md.
+  const [session, setSession] = useState<Session | null>(null)
+  const [sessionSingers, setSessionSingers] = useState<Singer[]>([])
+  const [templates, setTemplates] = useState<Template[]>([])
 
   // Cola en vivo + puntajes
   const [queue, setQueue] = useState<QueueItem[]>([])
   const [unscored, setUnscored] = useState<QueueItem[]>([])
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([])
   const [queueSong, setQueueSong] = useState<Song | null>(null)
+  const [queueSingerId, setQueueSingerId] = useState<string | null>(null)
   const [queueSingerName, setQueueSingerName] = useState('')
+  const [queueSingerPhoto, setQueueSingerPhoto] = useState<Blob | null>(null)
 
   // Wizard "Agregar canción nueva"
   const [wizardStep, setWizardStep] = useState<WizardStep>(1)
@@ -286,6 +304,7 @@ export function App() {
     const params = new URLSearchParams()
     if (searchQuery.trim()) params.set('q', searchQuery.trim())
     if (qualityFilter !== 'todos') params.set('quality', qualityFilter)
+    if (verifiedFilter !== 'todos') params.set('verified', String(verifiedFilter === 'si'))
     params.set('sort', sortAsc ? 'asc' : 'desc')
     params.set('limit', String(SONGS_PAGE_SIZE))
     params.set('offset', String(offset))
@@ -328,6 +347,33 @@ export function App() {
     setQueue(await queueRes.json())
     setUnscored(await unscoredRes.json())
     setLeaderboard(await leaderboardRes.json())
+  }
+
+  // --- Sesión de karaoke ----------------------------------------------------
+
+  async function refreshSession() {
+    const res = await fetch('/api/sessions/current')
+    const body: { session: Session | null; singers: Singer[] } = await res.json()
+    setSession(body.session)
+    setSessionSingers(body.singers)
+  }
+
+  async function refreshTemplates() {
+    const res = await fetch('/api/templates')
+    setTemplates(await res.json())
+  }
+
+  async function handleStartSession() {
+    await fetch('/api/sessions/start', { method: 'POST' })
+    refreshSession()
+    refreshQueue()
+  }
+
+  async function handleEndSession() {
+    if (!confirm('¿Terminar la sesión? Se borran los cantantes, sus fotos y la cola/puntajes — no se puede deshacer.')) return
+    await fetch('/api/sessions/end', { method: 'POST' })
+    refreshSession()
+    refreshQueue()
   }
 
   // --- Playlists ----------------------------------------------------------
@@ -380,17 +426,21 @@ export function App() {
 
   async function submitPushPlaylist() {
     if (!pushPlaylist) return
+    const singerId = await resolveSingerId(pushSingerName, pushSingerId, pushSingerPhoto)
     const res = await fetch(`/api/playlists/${pushPlaylist.id}/add-to-queue`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ singer: pushSinger }),
+      body: JSON.stringify({ singerId }),
     })
     const body = await res.json()
     setPushPlaylist(null)
-    setPushSinger('')
+    setPushSingerId(null)
+    setPushSingerName('')
+    setPushSingerPhoto(null)
     if (res.ok) {
       setPlaylistMessage(`${body.added} canciones agregadas a la cola.`)
       refreshQueue()
+      refreshSession()
     } else {
       setPlaylistMessage(body.error ?? 'No se pudo agregar a la cola.')
     }
@@ -407,6 +457,8 @@ export function App() {
     refreshQueue()
     refreshImportRoots()
     refreshPlaylists()
+    refreshSession()
+    refreshTemplates()
 
     const ws = new WebSocket(`ws://${location.hostname}:8080/ws`)
     wsRef.current = ws
@@ -425,7 +477,7 @@ export function App() {
   useEffect(() => {
     const id = setTimeout(() => refreshSongs(), 250)
     return () => clearTimeout(id)
-  }, [searchQuery, qualityFilter, sortAsc])
+  }, [searchQuery, qualityFilter, verifiedFilter, sortAsc])
 
   useEffect(() => {
     autoAdvanceRef.current = autoAdvance
@@ -455,6 +507,8 @@ export function App() {
         seekPlayback(getPositionSeconds() - 5)
       } else if (e.key === 'n' || e.key === 'N') {
         handleAdvanceQueue()
+      } else if ((e.key === 't' || e.key === 'T') && kioskMode) {
+        triggerFaceSwapOverlay()
       }
     }
     window.addEventListener('keydown', onKey)
@@ -987,18 +1041,39 @@ export function App() {
 
   function openAddToQueue(song: Song) {
     setQueueSong(song)
+    setQueueSingerId(null)
     setQueueSingerName('')
+    setQueueSingerPhoto(null)
+  }
+
+  /** Si ya se eligió un cantante existente (singerId), lo usa tal cual. Si
+   * no, crea uno nuevo con el nombre/foto tipeados — así el operador no
+   * tiene que pasar por un paso separado de "registrar cantante". */
+  async function resolveSingerId(name: string, singerId: string | null, photo: Blob | null): Promise<string | null> {
+    if (singerId) return singerId
+    const trimmed = name.trim()
+    if (!trimmed) return null
+    const form = new FormData()
+    form.set('name', trimmed)
+    if (photo) form.set('photo', photo, 'photo.jpg')
+    const res = await fetch('/api/singers', { method: 'POST', body: form })
+    if (!res.ok) return null
+    const singer: Singer = await res.json()
+    return singer.id
   }
 
   async function submitAddToQueue() {
     if (!queueSong) return
+    const singerId = await resolveSingerId(queueSingerName, queueSingerId, queueSingerPhoto)
+    if (!singerId) return
     await fetch('/api/queue', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ songId: queueSong.id, singer: queueSingerName }),
+      body: JSON.stringify({ songId: queueSong.id, singerId }),
     })
     setQueueSong(null)
     refreshQueue()
+    refreshSession()
   }
 
   async function handleRemoveFromQueue(id: string) {
@@ -1015,9 +1090,35 @@ export function App() {
     refreshQueue()
   }
 
+  async function toggleSyncVerified(song: Song) {
+    await fetch(`/api/songs/${song.id}/sync-verified`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ verified: !song.syncVerified }),
+    })
+    // Optimista: evita re-pedir la página entera solo por un toggle.
+    setSongs((prev) => prev.map((s) => (s.id === song.id ? { ...s, syncVerified: !song.syncVerified } : s)))
+  }
+
   async function handleAdvanceQueue() {
     await fetch('/api/queue/advance', { method: 'POST' })
     refreshQueue()
+  }
+
+  // Animación de "cara en el escenario": atajo de teclado en pantalla
+  // completa (T), invisible para el público. Se guarda photoUrl junto al
+  // template en vez de re-derivarlo de `queue` en cada render — si la
+  // canción avanza mientras el overlay está en pantalla, no queremos que la
+  // cara cambie a mitad de la animación.
+  const [activeFaceSwap, setActiveFaceSwap] = useState<{ template: Template; photoUrl: string } | null>(null)
+
+  function triggerFaceSwapOverlay() {
+    if (activeFaceSwap) return
+    const playingItem = queue.find((q) => q.status === 'playing')
+    if (!playingItem?.singerPhotoUrl) return
+    if (templates.length === 0) return
+    const template = templates[Math.floor(Math.random() * templates.length)]
+    setActiveFaceSwap({ template, photoUrl: playingItem.singerPhotoUrl })
   }
 
   // Fin natural de la canción. El motor de audio y el <video> llegan acá por
@@ -1138,7 +1239,38 @@ export function App() {
             </svg>
             Entrada en vivo
           </button>
+          <button className="nav-btn" onClick={() => window.location.assign('/template-editor')}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+              <ellipse cx="12" cy="12" rx="6" ry="8" />
+              <path d="M4 6l3 2M20 6l-3 2M4 18l3-2M20 18l-3-2" />
+            </svg>
+            Editor de templates
+          </button>
         </nav>
+
+        <div className="session-box">
+          {session ? (
+            <>
+              <div className="session-status">
+                <span className="session-dot active" />
+                Sesión activa · {sessionSingers.length} cantante{sessionSingers.length === 1 ? '' : 's'}
+              </div>
+              <button className="btn-secondary" onClick={handleEndSession}>
+                Terminar sesión
+              </button>
+            </>
+          ) : (
+            <>
+              <div className="session-status">
+                <span className="session-dot" />
+                Sesión: no iniciada
+              </div>
+              <button className="btn-primary" onClick={handleStartSession}>
+                Iniciar sesión
+              </button>
+            </>
+          )}
+        </div>
       </aside>
 
       <main className="stage">
@@ -1180,6 +1312,16 @@ export function App() {
               <option value="interpolated">Interpolada</option>
               <option value="none">Sin letra</option>
             </select>
+            <select
+              className="filter-select"
+              value={verifiedFilter}
+              onChange={(e) => setVerifiedFilter(e.target.value as 'todos' | 'si' | 'no')}
+              title="Canciones cuya sincronía ya escuchaste y confirmaste"
+            >
+              <option value="todos">Verificadas y sin verificar</option>
+              <option value="si">Solo verificadas ✓</option>
+              <option value="no">Solo sin verificar</option>
+            </select>
             <button className="btn-toolbar" onClick={() => setSortAsc((v) => !v)}>
               Ordenar {sortAsc ? 'A→Z' : 'Z→A'}
             </button>
@@ -1209,10 +1351,26 @@ export function App() {
                     </span>
                   </div>
                   <div className="row-actions">
+                    <button
+                      className={`row-verify-btn${s.syncVerified ? ' is-verified' : ''}`}
+                      onClick={() => toggleSyncVerified(s)}
+                      title={
+                        s.syncVerified
+                          ? 'Sincronía verificada — click para desmarcar'
+                          : 'Marcar como sincronía verificada'
+                      }
+                    >
+                      ✓
+                    </button>
                     <button className="row-play-btn" onClick={() => handlePlay(s.id)} disabled={isPlaying}>
                       {isPlaying ? 'Reproduciendo' : '▶ Reproducir'}
                     </button>
-                    <button className="row-queue-btn" onClick={() => openAddToQueue(s)} title="Agregar a la cola">
+                    <button
+                      className="row-queue-btn"
+                      onClick={() => openAddToQueue(s)}
+                      disabled={!session}
+                      title={session ? 'Agregar a la cola' : 'Iniciá una sesión primero'}
+                    >
                       + Cola
                     </button>
                     <button
@@ -1291,10 +1449,13 @@ export function App() {
                   <div className="playlist-card-actions">
                     <button
                       className="btn-primary"
-                      disabled={p.songCount === 0}
+                      disabled={p.songCount === 0 || !session}
+                      title={session ? undefined : 'Iniciá una sesión primero'}
                       onClick={() => {
                         setPushPlaylist(p)
-                        setPushSinger('')
+                        setPushSingerId(null)
+                        setPushSingerName('')
+                        setPushSingerPhoto(null)
                       }}
                     >
                       Agregar a la sesión
@@ -1351,7 +1512,10 @@ export function App() {
               {queue[0]?.status === 'playing' ? (
                 <>
                   <div className="queue-now-label">Cantando ahora</div>
-                  <div className="queue-now-singer">{queue[0].singer}</div>
+                  <div className="queue-now-singer">
+                    {queue[0].singerPhotoUrl && <img className="singer-thumb" src={queue[0].singerPhotoUrl} alt="" />}
+                    {queue[0].singer}
+                  </div>
                   <div className="queue-now-song">
                     {queue[0].song.title} · {queue[0].song.artist}
                   </div>
@@ -1382,7 +1546,10 @@ export function App() {
                       <div className="queue-row" key={item.id}>
                         <div className="queue-row-position">{i + 1}</div>
                         <div className="queue-row-info">
-                          <div className="queue-row-singer">{item.singer}</div>
+                          <div className="queue-row-singer">
+                            {item.singerPhotoUrl && <img className="singer-thumb" src={item.singerPhotoUrl} alt="" />}
+                            {item.singer}
+                          </div>
                           <div className="queue-row-song">
                             {item.song.title} · {item.song.artist}
                           </div>
@@ -1423,7 +1590,10 @@ export function App() {
                   {unscored.map((item) => (
                     <div className="queue-row" key={item.id}>
                       <div className="queue-row-info">
-                        <div className="queue-row-singer">{item.singer}</div>
+                        <div className="queue-row-singer">
+                          {item.singerPhotoUrl && <img className="singer-thumb" src={item.singerPhotoUrl} alt="" />}
+                          {item.singer}
+                        </div>
                         <div className="queue-row-song">
                           {item.song.title} · {item.song.artist}
                         </div>
@@ -1449,9 +1619,12 @@ export function App() {
             ) : (
               <div className="leaderboard-list">
                 {leaderboard.map((entry, i) => (
-                  <div className={`leaderboard-row${i === 0 ? ' is-leader' : ''}`} key={entry.singer}>
+                  <div className={`leaderboard-row${i === 0 ? ' is-leader' : ''}`} key={entry.singerId}>
                     <div className="leaderboard-rank">{i + 1}</div>
-                    <div className="leaderboard-singer">{entry.singer}</div>
+                    <div className="leaderboard-singer">
+                      {entry.singerPhotoUrl && <img className="singer-thumb" src={entry.singerPhotoUrl} alt="" />}
+                      {entry.singer}
+                    </div>
                     <div className="leaderboard-songs">
                       {entry.songsScored} canción{entry.songsScored === 1 ? '' : 'es'}
                     </div>
@@ -1787,6 +1960,13 @@ export function App() {
 
       {kioskMode && (
         <div className="performance">
+          {activeFaceSwap && (
+            <FaceSwapOverlay
+              template={activeFaceSwap.template}
+              photoUrl={activeFaceSwap.photoUrl}
+              onDone={() => setActiveFaceSwap(null)}
+            />
+          )}
           {backgroundVideoUrl && (
             <video className="background-video" src={backgroundVideoUrl} loop muted autoPlay playsInline />
           )}
@@ -1984,17 +2164,17 @@ export function App() {
             <p className="hint">
               Se van a encolar sus {pushPlaylist.songCount} canciones, en orden, al final de la cola.
             </p>
-            <div className="field">
-              <label>Cantante (opcional)</label>
-              <input
-                type="text"
-                placeholder="Dejalo vacío para asignar después"
-                value={pushSinger}
-                onChange={(e) => setPushSinger(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && submitPushPlaylist()}
-              />
-              <p className="hint">Si lo dejás vacío quedan como "Sin asignar" y podés asignarlas a medida que se anotan.</p>
-            </div>
+            <SingerPicker
+              sessionSingers={sessionSingers}
+              allowBlank
+              value={{ singerId: pushSingerId, name: pushSingerName, photo: pushSingerPhoto }}
+              onChange={(v) => {
+                setPushSingerId(v.singerId)
+                setPushSingerName(v.name)
+                setPushSingerPhoto(v.photo)
+              }}
+              onEnter={submitPushPlaylist}
+            />
             <div className="modal-actions">
               <button className="btn-secondary" onClick={() => setPushPlaylist(null)}>
                 Cancelar
@@ -2011,17 +2191,17 @@ export function App() {
         <div className="modal-backdrop" onClick={() => setQueueSong(null)}>
           <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
             <h2>Agregar "{queueSong.title}" a la cola</h2>
-            <div className="field">
-              <label>¿Quién canta?</label>
-              <input
-                type="text"
-                autoFocus
-                value={queueSingerName}
-                onChange={(e) => setQueueSingerName(e.target.value)}
-                placeholder="Nombre del invitado"
-                onKeyDown={(e) => e.key === 'Enter' && submitAddToQueue()}
-              />
-            </div>
+            <SingerPicker
+              sessionSingers={sessionSingers}
+              autoFocus
+              value={{ singerId: queueSingerId, name: queueSingerName, photo: queueSingerPhoto }}
+              onChange={(v) => {
+                setQueueSingerId(v.singerId)
+                setQueueSingerName(v.name)
+                setQueueSingerPhoto(v.photo)
+              }}
+              onEnter={submitAddToQueue}
+            />
             <div className="step-actions">
               <button className="btn-secondary" onClick={() => setQueueSong(null)}>
                 Cancelar
@@ -2079,11 +2259,13 @@ export function App() {
               </div>
               <button
                 className="playpause-btn"
-                onClick={togglePlayPause}
-                disabled={!isLocalReady}
-                aria-label={paused ? 'Reanudar' : 'Pausar'}
+                // Con una canción elegida pero sin arrancar (ej. después de
+                // recargar la página), el botón la pone en marcha en vez de
+                // quedar muerto y obligar a volver a la Biblioteca.
+                onClick={isLocalReady ? togglePlayPause : beginLocalPlayback}
+                aria-label={!isLocalReady || paused ? 'Reproducir' : 'Pausar'}
               >
-                {paused ? (
+                {!isLocalReady || paused ? (
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
                     <path d="M6 4l14 8-14 8z" />
                   </svg>

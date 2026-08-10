@@ -36,6 +36,27 @@
       "when": 1785553963972,
       "tag": "0004_loud_dreaming_celestial",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1785729164856,
+      "tag": "0005_flawless_war_machine",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1786399028376,
+      "tag": "0006_freezing_hydra",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1786399046140,
+      "tag": "0007_vengeful_paibok",
+      "breakpoints": true
     }
   ]
 }

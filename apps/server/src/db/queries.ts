@@ -10,9 +10,11 @@ import type {
   LeaderboardEntry,
   Playlist,
   PlaylistDetail,
+  Session,
+  Singer,
 } from '@kiosco/shared'
 import { db } from './client.js'
-import { songs, settings, queueItems, playlists, playlistSongs } from './schema.js'
+import { songs, settings, queueItems, playlists, playlistSongs, sessions, singers } from './schema.js'
 
 /** Prefijo que distingue un path "importado en el lugar" (carpeta externa del
  * usuario, nunca copiado a library/) de uno normal relativo a library/. Ver
@@ -42,7 +44,12 @@ function toWireSong(row: typeof songs.$inferSelect): Song {
     videoUrl: resolveMediaUrl(row.videoPath),
     // El instrumental siempre lo genera Demucs en library/ — nunca es externo.
     instrumentalUrl: row.instrumentalPath ? `/library/${row.instrumentalPath}` : null,
+    syncVerified: row.syncVerified === 1,
   }
+}
+
+export function setSyncVerified(id: string, verified: boolean): boolean {
+  return db.update(songs).set({ syncVerified: verified ? 1 : 0 }).where(eq(songs.id, id)).run().changes > 0
 }
 
 export function listSongs(): Song[] {
@@ -52,6 +59,8 @@ export function listSongs(): Song[] {
 export interface SongSearchParams {
   q?: string
   quality?: SyncQuality
+  /** true = solo verificadas a mano, false = solo las que faltan verificar. */
+  verified?: boolean
   sortDir?: 'asc' | 'desc'
   limit?: number
   offset?: number
@@ -63,13 +72,14 @@ export interface SongSearchParams {
  * miles de filas en cada render, incluido el tick de posición cada 200ms).
  * Filtra y ordena en SQLite, nunca carga más de `limit` filas en memoria. */
 export function searchSongs(params: SongSearchParams): { items: Song[]; total: number } {
-  const { q, quality, sortDir = 'asc', limit = 60, offset = 0 } = params
+  const { q, quality, verified, sortDir = 'asc', limit = 60, offset = 0 } = params
   const conditions = []
   if (q && q.trim()) {
     const like = `%${q.trim()}%`
     conditions.push(sql`(${songs.title} LIKE ${like} OR ${songs.artist} LIKE ${like})`)
   }
   if (quality) conditions.push(eq(songs.syncQuality, quality))
+  if (verified !== undefined) conditions.push(eq(songs.syncVerified, verified ? 1 : 0))
   const whereClause = conditions.length ? and(...conditions) : sql`1=1`
   const orderExpr =
     sortDir === 'desc' ? desc(sql`${songs.title} COLLATE NOCASE`) : asc(sql`${songs.title} COLLATE NOCASE`)
@@ -118,6 +128,14 @@ export function getNowPlaying(): Song | null {
   return row ? toWireSong(row) : null
 }
 
+/** Deja el reproductor sin canción seleccionada. Se llama al arrancar el
+ * server: `nowPlayingId` vive en `settings`, así que sin esto el kiosco
+ * levanta mostrando la última canción de la sesión anterior como si estuviera
+ * sonando (pero sin audio, porque el motor arranca vacío). */
+export function clearNowPlaying(): void {
+  db.delete(settings).where(eq(settings.key, 'nowPlayingId')).run()
+}
+
 /** @returns false si el id no existe en el catálogo. */
 export function setNowPlaying(songId: string): boolean {
   const row = db.select().from(songs).where(eq(songs.id, songId)).get()
@@ -143,10 +161,9 @@ export interface NewSong {
 }
 
 export function createSong(song: NewSong): Song {
-  db.insert(songs)
-    .values({ ...song, createdAt: Date.now() })
-    .run()
-  return toWireSong({ ...song, createdAt: Date.now() })
+  const row = { ...song, syncVerified: 0, createdAt: Date.now() }
+  db.insert(songs).values(row).run()
+  return toWireSong(row)
 }
 
 export function getBackgroundVideoUrl(): string | null {
@@ -195,12 +212,84 @@ export function listExternalPaths(): Set<string> {
   return paths
 }
 
+// --- sesión y cantantes --------------------------------------------------
+// Ver ROADMAP.md: una sesión de karaoke agrupa cantantes+fotos+cola+puntajes,
+// como mucho una activa a la vez, y es deliberadamente efímera — terminarla
+// borra todo (acá la parte de DB; la carpeta de fotos en disco la borra el
+// caller, mismo criterio que deleteSong con library/<id>/).
+
+function toWireSession(row: typeof sessions.$inferSelect): Session {
+  return { id: row.id, startedAt: row.startedAt }
+}
+
+function toWireSinger(row: typeof singers.$inferSelect): Singer {
+  return { id: row.id, name: row.name, photoUrl: resolveMediaUrl(row.photoPath) }
+}
+
+/** @returns null si no hay ninguna sesión activa. Nunca hay más de una. */
+export function getActiveSession(): Session | null {
+  const row = db.select().from(sessions).get()
+  return row ? toWireSession(row) : null
+}
+
+export function createSession(): Session {
+  const id = crypto.randomUUID()
+  const startedAt = Date.now()
+  db.insert(sessions).values({ id, startedAt }).run()
+  return { id, startedAt }
+}
+
+/** Borra (DB) todo lo que pertenece a la sesión: sus cantantes, la cola/
+ * puntajes enteros (nunca hay más de una sesión activa, así que `queue_items`
+ * no necesita filtrarse por sesión — ver decisión en el plan) y la fila de
+ * sesión misma. No toca disco. */
+export function endSession(sessionId: string): void {
+  db.delete(singers).where(eq(singers.sessionId, sessionId)).run()
+  db.delete(queueItems).run()
+  db.delete(sessions).where(eq(sessions.id, sessionId)).run()
+  clearNowPlaying()
+}
+
+export function listSessionSingers(sessionId: string): Singer[] {
+  return db
+    .select()
+    .from(singers)
+    .where(eq(singers.sessionId, sessionId))
+    .orderBy(asc(sql`${singers.name} COLLATE NOCASE`))
+    .all()
+    .map(toWireSinger)
+}
+
+export function createSinger(sessionId: string, name: string, photoPath: string | null): Singer {
+  const id = crypto.randomUUID()
+  const cleanName = name.trim() || 'Invitado'
+  db.insert(singers).values({ id, sessionId, name: cleanName, photoPath, createdAt: Date.now() }).run()
+  return { id, name: cleanName, photoUrl: resolveMediaUrl(photoPath) }
+}
+
+const UNASSIGNED_SINGER_NAME = 'Sin asignar'
+
+/** Sentinel reusado para "quedó sin asignar" al empujar una playlist entera
+ * sin elegir cantante — una fila por sesión, se crea la primera vez que
+ * hace falta (evita que `queue_items.singerId` tenga que admitir null). */
+export function getOrCreateUnassignedSinger(sessionId: string): Singer {
+  const existing = db
+    .select()
+    .from(singers)
+    .where(and(eq(singers.sessionId, sessionId), eq(singers.name, UNASSIGNED_SINGER_NAME)))
+    .get()
+  if (existing) return toWireSinger(existing)
+  return createSinger(sessionId, UNASSIGNED_SINGER_NAME, null)
+}
+
 // --- cola en vivo ------------------------------------------------------
 
-function toWireQueueItem(row: typeof queueItems.$inferSelect, song: Song): QueueItem {
+function toWireQueueItem(row: typeof queueItems.$inferSelect, song: Song, singer: Singer): QueueItem {
   return {
     id: row.id,
-    singer: row.singer,
+    singerId: singer.id,
+    singer: singer.name,
+    singerPhotoUrl: singer.photoUrl,
     status: row.status as QueueStatus,
     score: row.score,
     song: { id: song.id, title: song.title, artist: song.artist },
@@ -216,12 +305,14 @@ export function listQueue(): QueueItem[] {
     .orderBy(asc(queueItems.position))
     .all()
   const allSongs = new Map(listSongs().map((s) => [s.id, s]))
+  const allSingers = new Map(db.select().from(singers).all().map((s) => [s.id, toWireSinger(s)]))
   const playing = rows.filter((r) => r.status === 'playing')
   const queued = rows.filter((r) => r.status === 'queued')
   return [...playing, ...queued]
     .map((row) => {
       const song = allSongs.get(row.songId)
-      return song ? toWireQueueItem(row, song) : null
+      const singer = allSingers.get(row.singerId)
+      return song && singer ? toWireQueueItem(row, song, singer) : null
     })
     .filter((x): x is QueueItem => x !== null)
 }
@@ -235,18 +326,23 @@ export function listUnscored(): QueueItem[] {
     .orderBy(desc(queueItems.createdAt))
     .all()
   const allSongs = new Map(listSongs().map((s) => [s.id, s]))
+  const allSingers = new Map(db.select().from(singers).all().map((s) => [s.id, toWireSinger(s)]))
   return rows
     .map((row) => {
       const song = allSongs.get(row.songId)
-      return song ? toWireQueueItem(row, song) : null
+      const singer = allSingers.get(row.singerId)
+      return song && singer ? toWireQueueItem(row, song, singer) : null
     })
     .filter((x): x is QueueItem => x !== null)
 }
 
-/** @returns null si songId no existe en el catálogo. */
-export function addToQueue(songId: string, singer: string): QueueItem | null {
+/** @returns null si songId o singerId no existen. */
+export function addToQueue(songId: string, singerId: string): QueueItem | null {
   const song = getSongById(songId)
   if (!song) return null
+  const singerRow = db.select().from(singers).where(eq(singers.id, singerId)).get()
+  if (!singerRow) return null
+  const singer = toWireSinger(singerRow)
   const maxPos = db
     .select({ max: sql<number>`max(${queueItems.position})` })
     .from(queueItems)
@@ -254,14 +350,9 @@ export function addToQueue(songId: string, singer: string): QueueItem | null {
     .get()
   const position = (maxPos?.max ?? -1) + 1
   const id = crypto.randomUUID()
-  const cleanSinger = singer.trim() || 'Invitado'
-  db.insert(queueItems)
-    .values({ id, songId, singer: cleanSinger, status: 'queued', score: null, position, createdAt: Date.now() })
-    .run()
-  return toWireQueueItem(
-    { id, songId, singer: cleanSinger, status: 'queued', score: null, position, createdAt: Date.now() },
-    song,
-  )
+  const row = { id, songId, singerId, status: 'queued' as const, score: null, position, createdAt: Date.now() }
+  db.insert(queueItems).values(row).run()
+  return toWireQueueItem(row, song, singer)
 }
 
 /** Solo se puede sacar de la cola algo que todavía no empezó a cantarse. */
@@ -318,7 +409,9 @@ export function advanceQueue(): QueueItem | null {
 
   db.update(queueItems).set({ status: 'playing' }).where(eq(queueItems.id, next.id)).run()
   const song = getSongById(next.songId)
-  return song ? toWireQueueItem({ ...next, status: 'playing' }, song) : null
+  const singerRow = db.select().from(singers).where(eq(singers.id, next.singerId)).get()
+  if (!song || !singerRow) return null
+  return toWireQueueItem({ ...next, status: 'playing' }, song, toWireSinger(singerRow))
 }
 
 /** Solo se puntúa algo que ya terminó de cantarse. */
@@ -409,15 +502,17 @@ export function removeSongFromPlaylist(playlistId: string, songId: string): bool
 
 /**
  * Empuja toda la playlist al final de la cola en vivo, respetando su orden.
- * `singer` vacío queda como 'Sin asignar': cargar una lista de 20 temas no
- * implica saber todavía quién va a cantar cada uno — el operador los asigna
- * a medida que la gente se anota.
- * @returns cuántas se encolaron.
+ * `singerId` ausente queda asignado al sentinel "Sin asignar" de la sesión
+ * activa: cargar una lista de 20 temas no implica saber todavía quién va a
+ * cantar cada uno — el operador los asigna a medida que la gente se anota.
+ * @returns cuántas se encolaron (0 si la playlist no existe o no hay sesión activa).
  */
-export function addPlaylistToQueue(playlistId: string, singer: string): number {
+export function addPlaylistToQueue(playlistId: string, singerId: string | null): number {
   const detail = getPlaylist(playlistId)
   if (!detail) return 0
-  const cleanSinger = singer.trim() || 'Sin asignar'
+  const activeSession = getActiveSession()
+  if (!activeSession) return 0
+  const resolvedSingerId = singerId ?? getOrCreateUnassignedSinger(activeSession.id).id
   const maxPos = db
     .select({ max: sql<number>`max(${queueItems.position})` })
     .from(queueItems)
@@ -431,7 +526,7 @@ export function addPlaylistToQueue(playlistId: string, singer: string): number {
         .values({
           id: crypto.randomUUID(),
           songId: song.id,
-          singer: cleanSinger,
+          singerId: resolvedSingerId,
           status: 'queued',
           score: null,
           position: position++,
@@ -447,14 +542,22 @@ export function addPlaylistToQueue(playlistId: string, singer: string): number {
 export function getLeaderboard(): LeaderboardEntry[] {
   const rows = db
     .select({
-      singer: queueItems.singer,
+      singerId: queueItems.singerId,
       totalScore: sql<number>`sum(${queueItems.score})`,
       songsScored: sql<number>`count(*)`,
     })
     .from(queueItems)
     .where(and(eq(queueItems.status, 'done'), sql`${queueItems.score} is not null`))
-    .groupBy(queueItems.singer)
+    .groupBy(queueItems.singerId)
     .orderBy(sql`sum(${queueItems.score}) desc`)
     .all()
-  return rows.map((r) => ({ singer: r.singer, totalScore: r.totalScore, songsScored: r.songsScored }))
+  const allSingers = new Map(db.select().from(singers).all().map((s) => [s.id, toWireSinger(s)]))
+  return rows
+    .map((r) => {
+      const singer = allSingers.get(r.singerId)
+      return singer
+        ? { singerId: r.singerId, singer: singer.name, singerPhotoUrl: singer.photoUrl, totalScore: r.totalScore, songsScored: r.songsScored }
+        : null
+    })
+    .filter((x): x is LeaderboardEntry => x !== null)
 }

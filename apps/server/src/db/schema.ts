@@ -15,6 +15,14 @@ export const songs = sqliteTable('songs', {
   lyricsPath: text('lyrics_path'),
   videoPath: text('video_path'), // solo playbackMode = 'complete' con sourceFormat = 'baked-video'
   instrumentalPath: text('instrumental_path'), // solo si se sincronizó con Demucs (separar voz) — "modo karaoke real"
+  /**
+   * 0/1 puesto a mano por el operador: "escuché esta canción y la letra va
+   * sincronizada". `syncQuality` dice qué *tan bueno se espera* que sea el
+   * origen de los tiempos; esto dice que alguien lo confirmó de verdad.
+   * Sirve para curar un pack chico contra el cual probar cambios de
+   * sincronía antes de replicarlos al catálogo entero.
+   */
+  syncVerified: integer('sync_verified').notNull().default(0),
   createdAt: integer('created_at').notNull(),
 })
 
@@ -25,6 +33,31 @@ export const settings = sqliteTable('settings', {
 })
 
 /**
+ * Sesión de karaoke: como mucho una activa a la vez. No guarda historial —
+ * al terminarla se borra la fila entera (junto con singers/queue_items, ver
+ * queries.ts endSession) en vez de marcarla con un endedAt. Es deliberadamente
+ * efímera: cada evento arranca de cero.
+ */
+export const sessions = sqliteTable('sessions', {
+  id: text('id').primaryKey(),
+  startedAt: integer('started_at').notNull(),
+})
+
+/**
+ * Cantante registrado dentro de una sesión, con foto opcional. Reemplaza el
+ * string suelto que vivía en queue_items.singer — ahora la cola referencia
+ * un singerId, lo que permite reusar el mismo cantante en varias canciones
+ * sin re-tipear el nombre ni re-sacar la foto.
+ */
+export const singers = sqliteTable('singers', {
+  id: text('id').primaryKey(),
+  sessionId: text('session_id').notNull(),
+  name: text('name').notNull(),
+  photoPath: text('photo_path'), // relativo a library/_sessions/<sessionId>/, null = sin foto
+  createdAt: integer('created_at').notNull(),
+})
+
+/**
  * Cola en vivo: quién canta qué, en qué orden, y con qué puntaje quedó una
  * vez cantada. `position` solo ordena los `status='queued'` (arrastrar/subir/
  * bajar); una vez que pasa a 'playing'/'done' ya no se reordena.
@@ -32,7 +65,7 @@ export const settings = sqliteTable('settings', {
 export const queueItems = sqliteTable('queue_items', {
   id: text('id').primaryKey(),
   songId: text('song_id').notNull(),
-  singer: text('singer').notNull(),
+  singerId: text('singer_id').notNull(),
   status: text('status').notNull(), // 'queued' | 'playing' | 'done'
   score: integer('score'), // null hasta puntuarla; 1-10
   position: integer('position').notNull(),

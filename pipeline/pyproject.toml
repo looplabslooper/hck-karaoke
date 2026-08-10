@@ -9,6 +9,8 @@ dependencies = [
     "torchaudio>=2.6.0",
     "whisperx>=3.4.5",
     "demucs>=4.0.1",
+    "opencv-python>=5.0.0.93",
+    "mediapipe>=1.0.0",
 ]
 
 [tool.uv.sources]
