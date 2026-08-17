@@ -1,123 +1,22 @@
 import { useEffect, useRef } from 'react'
 import type { Template } from '@kiosco/shared'
+import {
+  AXIS_RATIO_X,
+  AXIS_RATIO_Y,
+  averageLuminance,
+  coverFit,
+  getFaceCutout,
+  interpolate,
+  loadFaceCutout,
+  TARGET_COVERAGE,
+  type Oval,
+} from './faceSwapCache'
 
 interface Props {
   template: Template
   photoUrl: string
+  oval: Oval | null
   onDone: () => void
-}
-
-// Misma proporción de ejes que pipeline/track_color.py, pipeline/compose_preview.py
-// y template-editor.html — `scale` es "distancia interocular (o equivalente)
-// normalizada por el ancho del template", y estos factores convierten eso en
-// el semi-ancho/semi-alto del óvalo pegado.
-const AXIS_RATIO_X = 1.1
-const AXIS_RATIO_Y = 1.5
-
-type Frame = Template['transform']['frames'][number]
-type ResolvedFrame = { t: number; cx: number; cy: number; angle: number; scale: number }
-
-/** Interpola cx/cy/angle/scale entre los dos frames de transform.json más
- * cercanos a t, sosteniendo el primero/último fuera de rango — misma lógica
- * que template-editor.html y pipeline/compose_preview.py, para que este
- * compositor en vivo se comporte igual que lo ya validado offline. */
-function interpolate(frames: Frame[], t: number): ResolvedFrame | null {
-  const usable = frames.filter(
-    (f): f is Frame & ResolvedFrame => f.cx !== null && f.cy !== null && f.angle !== null && f.scale !== null,
-  )
-  if (usable.length === 0) return null
-  if (t <= usable[0].t) return usable[0]
-  const last = usable[usable.length - 1]
-  if (t >= last.t) return last
-  for (let i = 0; i < usable.length - 1; i++) {
-    const a = usable[i]
-    const b = usable[i + 1]
-    if (t >= a.t && t <= b.t) {
-      const span = b.t - a.t || 1
-      const f = (t - a.t) / span
-      const da = ((b.angle - a.angle + Math.PI) % (2 * Math.PI)) - Math.PI
-      return {
-        t,
-        cx: a.cx + (b.cx - a.cx) * f,
-        cy: a.cy + (b.cy - a.cy) * f,
-        angle: a.angle + da * f,
-        scale: a.scale + (b.scale - a.scale) * f,
-      }
-    }
-  }
-  return last
-}
-
-/** Mismo "cover" que `object-fit: cover` en CSS, pero para dibujar a mano en
- * un canvas (drawImage no tiene object-fit) — necesario porque acá se
- * compone video + parche en un solo canvas, no un <video> suelto. */
-function coverFit(srcW: number, srcH: number, dstW: number, dstH: number) {
-  const srcRatio = srcW / srcH
-  const dstRatio = dstW / dstH
-  let drawW: number
-  let drawH: number
-  if (srcRatio > dstRatio) {
-    drawH = dstH
-    drawW = dstH * srcRatio
-  } else {
-    drawW = dstW
-    drawH = dstW / srcRatio
-  }
-  return { dx: (dstW - drawW) / 2, dy: (dstH - drawH) / 2, drawW, drawH }
-}
-
-/** Recorte ovalado con feather, centrado en la foto entera — mismo truco de
- * máscara radial que ovalMaskCutout() en karaoke-walk.html. Sin detección de
- * cara: asume que la foto ya viene más o menos centrada en el rostro (la
- * vista previa en vivo de SingerPicker empuja a eso al capturar). */
-function ovalMaskCutout(img: HTMLImageElement): HTMLCanvasElement {
-  const c = document.createElement('canvas')
-  c.width = img.naturalWidth
-  c.height = img.naturalHeight
-  const cctx = c.getContext('2d')!
-  cctx.drawImage(img, 0, 0)
-
-  const maskCanvas = document.createElement('canvas')
-  maskCanvas.width = c.width
-  maskCanvas.height = c.height
-  const mctx = maskCanvas.getContext('2d')!
-  const rx = c.width * 0.46
-  const ry = c.height * 0.48
-  mctx.save()
-  mctx.translate(c.width / 2, c.height / 2)
-  mctx.scale(rx, ry)
-  const g = mctx.createRadialGradient(0, 0, 0.5, 0, 0, 1)
-  g.addColorStop(0, 'rgba(255,255,255,1)')
-  g.addColorStop(1, 'rgba(255,255,255,0)')
-  mctx.fillStyle = g
-  mctx.beginPath()
-  mctx.arc(0, 0, 1, 0, Math.PI * 2)
-  mctx.fill()
-  mctx.restore()
-
-  cctx.globalCompositeOperation = 'destination-in'
-  cctx.drawImage(maskCanvas, 0, 0)
-  cctx.globalCompositeOperation = 'source-over'
-  return c
-}
-
-/** Luminancia promedio de una región del canvas (muestreada, no pixel a
- * pixel) — heurística de primera pasada para acercar el brillo del parche
- * pegado al del video de abajo. No es color-grading real, ver plan. */
-function averageLuminance(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number): number {
-  const sx = Math.max(0, Math.round(x))
-  const sy = Math.max(0, Math.round(y))
-  const sw = Math.max(1, Math.min(Math.round(w), ctx.canvas.width - sx))
-  const sh = Math.max(1, Math.min(Math.round(h), ctx.canvas.height - sy))
-  const { data } = ctx.getImageData(sx, sy, sw, sh)
-  const stride = 16 // 1 cada 4 píxeles (4 canales) — alcanza para un promedio
-  let sum = 0
-  let count = 0
-  for (let i = 0; i < data.length; i += stride) {
-    sum += 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]
-    count++
-  }
-  return count > 0 ? sum / count : 128
 }
 
 /**
@@ -126,26 +25,32 @@ function averageLuminance(ctx: CanvasRenderingContext2D, x: number, y: number, w
  * (que vive siempre montado, ver gotcha en CLAUDE.md), este SÍ se monta/
  * desmonta libremente — es efímero por diseño.
  */
-export function FaceSwapOverlay({ template, photoUrl, onDone }: Props) {
+export function FaceSwapOverlay({ template, photoUrl, oval, onDone }: Props) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const cutoutRef = useRef<HTMLCanvasElement | null>(null)
   const cutoutLuminanceRef = useRef(128)
 
+  // Precalentado por App.tsx (ver efecto sobre sessionSingers) — normalmente
+  // ya está en cache para cuando este overlay se monta. `loadFaceCutout`
+  // sirve de fallback sin duplicar la lógica de recorte si igual hay un miss.
   useEffect(() => {
     let cancelled = false
-    const img = new Image()
-    img.onload = () => {
-      if (cancelled) return
-      const cutout = ovalMaskCutout(img)
-      cutoutRef.current = cutout
-      cutoutLuminanceRef.current = averageLuminance(cutout.getContext('2d')!, 0, 0, cutout.width, cutout.height)
+    const cached = getFaceCutout(photoUrl)
+    if (cached) {
+      cutoutRef.current = cached.cutout
+      cutoutLuminanceRef.current = cached.luminance
+      return
     }
-    img.src = photoUrl
+    loadFaceCutout(photoUrl, oval).then((result) => {
+      if (cancelled) return
+      cutoutRef.current = result.cutout
+      cutoutLuminanceRef.current = result.luminance
+    })
     return () => {
       cancelled = true
     }
-  }, [photoUrl])
+  }, [photoUrl, oval])
 
   useEffect(() => {
     const video = videoRef.current
@@ -196,8 +101,8 @@ export function FaceSwapOverlay({ template, photoUrl, onDone }: Props) {
       if (cutout && point) {
         const canvasX = dx + point.cx * drawW
         const canvasY = dy + point.cy * drawH
-        const targetW = point.scale * drawW * AXIS_RATIO_X * 2
-        const targetH = point.scale * drawW * AXIS_RATIO_Y * 2
+        const targetW = point.scale * drawW * AXIS_RATIO_X * 2 * TARGET_COVERAGE
+        const targetH = point.scale * drawW * AXIS_RATIO_Y * 2 * TARGET_COVERAGE
 
         const videoLuminance = averageLuminance(ctx, canvasX - targetW / 2, canvasY - targetH / 2, targetW, targetH)
         const brightness = cutoutLuminanceRef.current > 0 ? videoLuminance / cutoutLuminanceRef.current : 1

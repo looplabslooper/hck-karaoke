@@ -6,11 +6,14 @@ import { fileURLToPath } from 'node:url'
 import express from 'express'
 import multer from 'multer'
 import { WebSocketServer, WebSocket } from 'ws'
-import type { ServerMsg, LyricsDoc, SyncQuality } from '@kiosco/shared'
-import { detectFormat } from '@kiosco/shared'
+import type { ServerMsg, LyricsDoc, SyncQuality, Genre, CategoryId } from '@kiosco/shared'
+import { detectFormat, GENRES } from '@kiosco/shared'
 import {
   searchSongs,
   getRandomSongs,
+  getCategorySongs,
+  getHomeCategories,
+  setHomeCategories,
   getSongById,
   getNowPlaying,
   setNowPlaying,
@@ -18,12 +21,16 @@ import {
   createSong,
   updateSongSync,
   setSyncVerified,
+  setSongGenre,
   deleteSong,
   getBackgroundVideoUrl,
   setBackgroundVideo,
   listQueue,
   listUnscored,
   addToQueue,
+  addSongsToQueue,
+  countQueuedSongsBySinger,
+  interleaveQueue,
   removeFromQueue,
   moveQueueItem,
   advanceQueue,
@@ -43,12 +50,18 @@ import {
   addPlaylistToQueue,
   getActiveSession,
   createSession,
+  beginSession,
   endSession,
   listSessionSingers,
   createSinger,
+  listBanners,
+  createBanner,
+  deleteBanner,
+  setBannerOrder,
 } from './db/queries.js'
 import { runAlignment } from './sync/align.js'
 import { transcodeToMp3 } from './sync/transcode.js'
+import { runColorTracking } from './sync/templateTracking.js'
 import { scanFolders, type ImportCandidate } from './import.js'
 import { listTemplates } from './templates.js'
 
@@ -73,17 +86,11 @@ app.get('/health', (_req, res) => res.send('ok'))
 app.use('/library', express.static(libraryDir))
 app.use('/templates', express.static(templatesDir))
 
-// Herramienta de "entrada en vivo" (chroma key + animación de caminata para
-// presentar al próximo cantante) — HTML/JS autocontenido, sin dependencias,
-// se sirve tal cual en vez de portarlo a un componente React.
-app.get('/walk-on', (_req, res) => {
-  res.sendFile(path.resolve(__dirname, '../public/karaoke-walk.html'))
-})
-
 // Editor de templates: arma a mano la curva de posición/ángulo/escala del
 // "slot" de cara sobre un video (transform.json), en vez de extraerla
 // trackeando la cara de quien sale en el video — ver .claude/agents/director-escenas.md
-// para el porqué. Mismo criterio que /walk-on: HTML/JS autocontenido.
+// para el porqué. HTML/JS autocontenido, sin dependencias, se sirve tal cual
+// en vez de portarlo a un componente React.
 app.get('/template-editor', (_req, res) => {
   res.sendFile(path.resolve(__dirname, '../public/template-editor.html'))
 })
@@ -113,6 +120,30 @@ app.get('/api/songs/random', (req, res) => {
 app.post('/api/songs/:id/sync-verified', (req, res) => {
   const verified = req.body.verified === true
   if (!setSyncVerified(req.params.id, verified)) return res.status(404).json({ error: 'song not found' })
+  res.json({ ok: true })
+})
+
+// Etiquetado de género a mano — ningún importador lo trae (ver plan de rediseño).
+app.post('/api/songs/:id/genre', (req, res) => {
+  const genre = req.body.genre as Genre | null
+  if (genre !== null && !GENRES.includes(genre)) return res.status(400).json({ error: 'género inválido' })
+  if (!setSongGenre(req.params.id, genre)) return res.status(404).json({ error: 'song not found' })
+  res.json({ ok: true })
+})
+
+// Canciones de una categoría de Inicio (nuevas/verificadas/género) — Inicio y
+// Configuración → Categorías de inicio.
+app.get('/api/songs/category/:id', (req, res) => {
+  const limit = Math.min(Math.max(Number(req.query.limit) || 15, 1), 50)
+  res.json(getCategorySongs(req.params.id as CategoryId, limit))
+})
+
+app.get('/api/settings/home-categories', (_req, res) => res.json(getHomeCategories()))
+
+app.post('/api/settings/home-categories', (req, res) => {
+  const ids = req.body.ids as unknown
+  if (!Array.isArray(ids)) return res.status(400).json({ error: 'ids debe ser un array' })
+  setHomeCategories(ids as CategoryId[])
   res.json({ ok: true })
 })
 
@@ -164,6 +195,23 @@ app.post('/api/sessions/start', (_req, res) => {
   res.json(session)
 })
 
+// Pasa del armado guiado al show en vivo. Se valida acá (y no solo en la UI)
+// para que la sesión nunca quede 'corriendo' sin nadie a quien llamar.
+app.post('/api/sessions/begin', (_req, res) => {
+  const active = getActiveSession()
+  if (!active) return res.status(400).json({ error: 'no hay sesión activa' })
+  if (active.status === 'corriendo') return res.json(active)
+  if (listSessionSingers(active.id).length === 0) {
+    return res.status(400).json({ error: 'no hay ningún cantante cargado' })
+  }
+  if (listQueue().length === 0) {
+    return res.status(400).json({ error: 'no hay ninguna canción en la cola' })
+  }
+  // El show arranca ya alternado por cantante — ver interleaveQueue.
+  interleaveQueue()
+  res.json(beginSession(active.id))
+})
+
 app.post('/api/sessions/end', (_req, res) => {
   const active = getActiveSession()
   if (!active) return res.status(400).json({ error: 'no hay sesión activa' })
@@ -201,12 +249,66 @@ app.post('/api/singers', requireActiveSession, singerUpload.single('photo'), (re
   const session = getActiveSession()!
   const name = (req.body.name as string | undefined) ?? ''
   const photoPath = req.file ? `${SESSIONS_DIR}/${session.id}/${req.file.filename}` : null
-  res.json(createSinger(session.id, name, photoPath))
+  const ovalCx = parseFloat(req.body.ovalCx)
+  const ovalCy = parseFloat(req.body.ovalCy)
+  const ovalScale = parseFloat(req.body.ovalScale)
+  const oval =
+    Number.isFinite(ovalCx) && Number.isFinite(ovalCy) && Number.isFinite(ovalScale)
+      ? { cx: ovalCx, cy: ovalCy, scale: ovalScale }
+      : null
+  res.json(createSinger(session.id, name, photoPath, oval))
 })
 
-// --- templates (animación de cara en el escenario) ----------------------
+// --- templates (animación de cara en el escenario, "Fun Box") -----------
 
 app.get('/api/templates', (_req, res) => res.json(listTemplates(templatesDir)))
+
+const templateUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, _file, cb) => {
+      const id = crypto.randomUUID()
+      req.res!.locals.templateId = id
+      const dir = path.join(templatesDir, id)
+      fs.mkdirSync(dir, { recursive: true })
+      cb(null, dir)
+    },
+    // Se fuerza .mp4 siempre — listTemplates() espera ese nombre exacto, y
+    // en la práctica el video sube ya en mp4 (salida típica de Gemini/Veo,
+    // ver .claude/agents/director-escenas.md). Si algún día hace falta
+    // aceptar otros contenedores, acá es donde transcodificar primero.
+    filename: (_req, _file, cb) => cb(null, 'video.mp4'),
+  }),
+})
+
+// Sube un video crudo y corre el tracking por color automáticamente (mismo
+// subproceso que ya se usaba a mano vía pipeline/track_color.py) — el
+// operador no toca la terminal ni /template-editor para esto.
+app.post('/api/templates', templateUpload.single('video'), async (req, res) => {
+  const id: string = res.locals.templateId
+  const dir = path.join(templatesDir, id)
+  if (!req.file) {
+    fs.rmSync(dir, { recursive: true, force: true })
+    return res.status(400).json({ error: 'falta el archivo de video' })
+  }
+
+  const videoPath = path.join(dir, 'video.mp4')
+  const transformPath = path.join(dir, 'transform.json')
+  try {
+    await runColorTracking(videoPath, transformPath)
+    const transform = JSON.parse(fs.readFileSync(transformPath, 'utf-8'))
+    res.json({ id, videoUrl: `/templates/${id}/video.mp4`, transform })
+  } catch (err) {
+    fs.rmSync(dir, { recursive: true, force: true })
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) })
+  }
+})
+
+app.delete('/api/templates/:id', (req, res) => {
+  const dir = path.join(templatesDir, req.params.id)
+  if (!fs.existsSync(dir)) return res.status(404).json({ error: 'template not found' })
+  fs.rmSync(dir, { recursive: true, force: true })
+  res.json({ ok: true })
+})
 
 // --- cola en vivo + puntajes ------------------------------------------------
 
@@ -219,6 +321,28 @@ app.post('/api/queue', (req, res) => {
   const item = addToQueue(songId, singerId)
   if (!item) return res.status(404).json({ error: 'song o singer not found' })
   res.json(item)
+})
+
+// Varias canciones para un mismo cantante de una — el paso "elegí sus
+// canciones" del armado guiado, que si no tendría que hacer N requests.
+app.post('/api/queue/batch', requireActiveSession, (req, res) => {
+  const songIds = req.body.songIds as unknown
+  const singerId = req.body.singerId as string | undefined
+  if (!singerId || !Array.isArray(songIds)) {
+    return res.status(400).json({ error: 'falta singerId o songIds' })
+  }
+  const added = addSongsToQueue(songIds.filter((id): id is string => typeof id === 'string'), singerId)
+  res.json({ added })
+})
+
+app.get('/api/queue/counts', (_req, res) => res.json(countQueuedSongsBySinger()))
+
+// Botón "Alternar turnos": para cuando se sumaron canciones en vivo y la
+// cola quedó despareja. El reordenamiento manual del admin manda después —
+// esto nunca se dispara solo.
+app.post('/api/queue/interleave', requireActiveSession, (_req, res) => {
+  interleaveQueue()
+  res.json({ ok: true })
 })
 
 app.delete('/api/queue/:id', (req, res) => {
@@ -576,6 +700,43 @@ app.post('/api/settings/background-video', backgroundUpload.single('video'), (re
   res.json({ ok: true })
 })
 
+// --- banners del carrusel de Inicio ---------------------------------------
+// Ver PROMPTS-BANNERS.md — lista abierta, solo imagen (sin título/subtítulo).
+
+const BANNERS_DIR = '_banners'
+
+const bannerUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => {
+      const dir = path.join(libraryDir, BANNERS_DIR)
+      fs.mkdirSync(dir, { recursive: true })
+      cb(null, dir)
+    },
+    filename: (_req, file, cb) => cb(null, `${crypto.randomUUID()}${path.extname(file.originalname) || '.jpg'}`),
+  }),
+})
+
+app.get('/api/banners', (_req, res) => res.json(listBanners()))
+
+app.post('/api/banners', bannerUpload.single('image'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'falta la imagen' })
+  res.json(createBanner(`${BANNERS_DIR}/${req.file.filename}`))
+})
+
+app.delete('/api/banners/:id', (req, res) => {
+  const imagePath = deleteBanner(req.params.id)
+  if (!imagePath) return res.status(404).json({ error: 'banner not found' })
+  fs.rmSync(path.join(libraryDir, imagePath), { force: true })
+  res.json({ ok: true })
+})
+
+app.post('/api/banners/reorder', express.json(), (req, res) => {
+  const ids = req.body.ids as unknown
+  if (!Array.isArray(ids)) return res.status(400).json({ error: 'ids debe ser un array' })
+  setBannerOrder(ids as string[])
+  res.json({ ok: true })
+})
+
 // --- importar carpetas externas --------------------------------------------
 // Bibliotecas de karaoke ya armadas (audio + letra, o video quemado) pueden
 // vivir en cualquier carpeta del disco — nunca se copian a library/ (podrían
@@ -669,7 +830,7 @@ app.get('/api/external-file', (req, res) => {
 })
 
 // --- frontend en producción ------------------------------------------------
-// En dev, `apps/admin` corre su propio Vite (:5174) con proxy hacia acá. Para
+// En dev, `apps/admin` corre su propio Vite (:5175) con proxy hacia acá. Para
 // el kiosco empaquetado no hay Vite corriendo — este mismo proceso sirve el
 // build ya generado (`pnpm --filter @kiosco/admin build`) para que todo viva
 // en un solo origen (:8080). Va al final, después de /api y /library, para
@@ -693,7 +854,7 @@ if (process.env.npm_lifecycle_event === 'dev') {
         `<body style="font:16px system-ui;background:#0f1115;color:#e8e6f0;padding:3rem;line-height:1.6">
          <h1 style="color:#a78bfa">Modo desarrollo</h1>
          <p>Este puerto (:8080) sirve solo la API y <code>/library</code>.</p>
-         <p>La interfaz corre en <a style="color:#a78bfa" href="http://localhost:5174/">http://localhost:5174/</a> (Vite, con hot reload).</p>
+         <p>La interfaz corre en <a style="color:#a78bfa" href="http://localhost:5175/">http://localhost:5175/</a> (Vite, con hot reload).</p>
          <p style="color:#8b8a99">Para probar el kiosco tal cual se ve en producción: <code>pnpm build && pnpm start</code>.</p>
          </body>`,
       )

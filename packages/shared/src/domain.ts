@@ -23,7 +23,29 @@ export interface Song {
    * Distinto de `syncQuality`, que es una expectativa según el origen de los
    * tiempos: esto es verificación humana. */
   syncVerified: boolean
+  /** Uno de `GENRES`, o null hasta que se etiquete a mano — ningún importador
+   * trae género (ver .claude/plans, sección "Categorías"). */
+  genre: Genre | null
 }
+
+/** Taxonomía fija de géneros — no es texto libre, para que las categorías de
+ * Inicio tengan un conjunto conocido de antemano. */
+export const GENRES = ['cumbia', 'rock', 'pop', 'balada', 'fiesta'] as const
+export type Genre = (typeof GENRES)[number]
+
+/** Id de categoría de Inicio/Biblioteca: 'nuevas' y 'verificadas' son
+ * estructurales (no necesitan género), el resto son los `GENRES`. */
+export type CategoryId = 'nuevas' | 'verificadas' | Genre
+
+export const CATEGORIES: { id: CategoryId; name: string; desc: string }[] = [
+  { id: 'nuevas', name: 'Novedades', desc: 'Últimas canciones agregadas' },
+  { id: 'verificadas', name: 'Sincronía verificada', desc: 'Confirmadas a oído por el operador' },
+  { id: 'cumbia', name: 'Cumbia', desc: 'Género' },
+  { id: 'rock', name: 'Rock nacional', desc: 'Género' },
+  { id: 'pop', name: 'Pop', desc: 'Género' },
+  { id: 'balada', name: 'Baladas', desc: 'Género' },
+  { id: 'fiesta', name: 'Fiesta', desc: 'Género' },
+]
 
 /** 'queued' espera turno, 'playing' es la que está sonando ahora, 'done' ya
  * se cantó (con o sin puntaje todavía). */
@@ -49,10 +71,15 @@ export interface LeaderboardEntry {
   songsScored: number
 }
 
+/** 'armando' = el admin está cargando cantantes y sus canciones (el show
+ * todavía no arrancó); 'corriendo' = ya está en vivo. */
+export type SessionStatus = 'armando' | 'corriendo'
+
 /** Sesión de karaoke activa. Como mucho una a la vez — ver ROADMAP.md. */
 export interface Session {
   id: string
   startedAt: number
+  status: SessionStatus
 }
 
 export interface Singer {
@@ -60,6 +87,10 @@ export interface Singer {
   name: string
   /** null si no cargó foto (es opcional al registrarse). */
   photoUrl: string | null
+  /** Óvalo de recorte de cara calibrado a mano (fracciones del ancho/alto de
+   * la foto, misma convención que Template.transform.frames). null = sin
+   * calibrar, el compositor usa un óvalo centrado por default. */
+  oval: { cx: number; cy: number; scale: number } | null
 }
 
 /** Pista de posición/ángulo/escala del "slot" de cara en un video-template
@@ -88,4 +119,11 @@ export interface Playlist {
 /** Una playlist con sus canciones resueltas, para la vista de detalle. */
 export interface PlaylistDetail extends Playlist {
   songs: Song[]
+}
+
+/** Banner del carrusel de Inicio — solo imagen, sin título/subtítulo (ver
+ * PROMPTS-BANNERS.md: el texto, si hace falta, ya viene quemado en la imagen). */
+export interface Banner {
+  id: string
+  imageUrl: string
 }

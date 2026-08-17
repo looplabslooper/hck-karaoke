@@ -57,6 +57,34 @@
       "when": 1786399046140,
       "tag": "0007_vengeful_paibok",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1786415494071,
+      "tag": "0008_tearful_boom_boom",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1786417870060,
+      "tag": "0009_handy_gwen_stacy",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1786464303399,
+      "tag": "0010_curious_dark_phoenix",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1786489325891,
+      "tag": "0011_cool_absorbing_man",
+      "breakpoints": true
     }
   ]
 }

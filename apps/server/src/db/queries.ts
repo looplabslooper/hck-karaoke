@@ -5,16 +5,20 @@ import type {
   PlaybackMode,
   SourceFormat,
   SyncQuality,
+  Genre,
+  CategoryId,
   QueueItem,
   QueueStatus,
   LeaderboardEntry,
   Playlist,
   PlaylistDetail,
   Session,
+  SessionStatus,
   Singer,
+  Banner,
 } from '@kiosco/shared'
 import { db } from './client.js'
-import { songs, settings, queueItems, playlists, playlistSongs, sessions, singers } from './schema.js'
+import { songs, settings, queueItems, playlists, playlistSongs, sessions, singers, banners } from './schema.js'
 
 /** Prefijo que distingue un path "importado en el lugar" (carpeta externa del
  * usuario, nunca copiado a library/) de uno normal relativo a library/. Ver
@@ -45,11 +49,17 @@ function toWireSong(row: typeof songs.$inferSelect): Song {
     // El instrumental siempre lo genera Demucs en library/ — nunca es externo.
     instrumentalUrl: row.instrumentalPath ? `/library/${row.instrumentalPath}` : null,
     syncVerified: row.syncVerified === 1,
+    genre: (row.genre as Genre | null) ?? null,
   }
 }
 
 export function setSyncVerified(id: string, verified: boolean): boolean {
   return db.update(songs).set({ syncVerified: verified ? 1 : 0 }).where(eq(songs.id, id)).run().changes > 0
+}
+
+/** @returns false si el id no existe. `genre: null` saca la etiqueta. */
+export function setSongGenre(id: string, genre: Genre | null): boolean {
+  return db.update(songs).set({ genre }).where(eq(songs.id, id)).run().changes > 0
 }
 
 export function listSongs(): Song[] {
@@ -60,6 +70,19 @@ export function listSongs(): Song[] {
  * cada carga — invita a explorar en vez de mostrar siempre lo mismo. */
 export function getRandomSongs(limit: number): Song[] {
   return db.select().from(songs).orderBy(sql`RANDOM()`).limit(limit).all().map(toWireSong)
+}
+
+/** Canciones de una categoría de Inicio/Configuración — 'nuevas' y
+ * 'verificadas' son estructurales, cualquier otro id se interpreta como
+ * género. Mismo shape {items,total} que searchSongs para consistencia. */
+export function getCategorySongs(categoryId: CategoryId, limit: number): { items: Song[]; total: number } {
+  const whereClause =
+    categoryId === 'nuevas' ? sql`1=1` : categoryId === 'verificadas' ? eq(songs.syncVerified, 1) : eq(songs.genre, categoryId)
+  const orderExpr = categoryId === 'nuevas' ? desc(songs.createdAt) : asc(sql`${songs.title} COLLATE NOCASE`)
+
+  const rows = db.select().from(songs).where(whereClause).orderBy(orderExpr).limit(limit).all()
+  const total = db.select({ count: sql<number>`count(*)` }).from(songs).where(whereClause).get()?.count ?? 0
+  return { items: rows.map(toWireSong), total }
 }
 
 export interface SongSearchParams {
@@ -167,9 +190,30 @@ export interface NewSong {
 }
 
 export function createSong(song: NewSong): Song {
-  const row = { ...song, syncVerified: 0, createdAt: Date.now() }
+  const row = { ...song, syncVerified: 0, genre: null, createdAt: Date.now() }
   db.insert(songs).values(row).run()
   return toWireSong(row)
+}
+
+/** IDs de `CATEGORIES` (shared/domain.ts) elegidas para mostrar en Inicio,
+ * en orden — hasta 3. Mismo patrón que getImportRoots/setImportRoots. */
+export function getHomeCategories(): CategoryId[] {
+  const row = db.select().from(settings).where(eq(settings.key, 'homeCategories')).get()
+  if (!row) return ['nuevas', 'verificadas', 'cumbia']
+  try {
+    const parsed = JSON.parse(row.value)
+    return Array.isArray(parsed) ? (parsed as CategoryId[]) : ['nuevas', 'verificadas', 'cumbia']
+  } catch {
+    return ['nuevas', 'verificadas', 'cumbia']
+  }
+}
+
+export function setHomeCategories(ids: CategoryId[]): void {
+  const value = JSON.stringify(ids.slice(0, 3))
+  db.insert(settings)
+    .values({ key: 'homeCategories', value })
+    .onConflictDoUpdate({ target: settings.key, set: { value } })
+    .run()
 }
 
 export function getBackgroundVideoUrl(): string | null {
@@ -225,11 +269,16 @@ export function listExternalPaths(): Set<string> {
 // caller, mismo criterio que deleteSong con library/<id>/).
 
 function toWireSession(row: typeof sessions.$inferSelect): Session {
-  return { id: row.id, startedAt: row.startedAt }
+  return { id: row.id, startedAt: row.startedAt, status: row.status as SessionStatus }
+}
+
+function toWireSingerOval(row: typeof singers.$inferSelect): Singer['oval'] {
+  if (row.ovalCx === null || row.ovalCy === null || row.ovalScale === null) return null
+  return { cx: row.ovalCx, cy: row.ovalCy, scale: row.ovalScale }
 }
 
 function toWireSinger(row: typeof singers.$inferSelect): Singer {
-  return { id: row.id, name: row.name, photoUrl: resolveMediaUrl(row.photoPath) }
+  return { id: row.id, name: row.name, photoUrl: resolveMediaUrl(row.photoPath), oval: toWireSingerOval(row) }
 }
 
 /** @returns null si no hay ninguna sesión activa. Nunca hay más de una. */
@@ -238,11 +287,23 @@ export function getActiveSession(): Session | null {
   return row ? toWireSession(row) : null
 }
 
+/** Arranca en 'armando': la sesión existe pero el show todavía no empezó —
+ * el admin primero carga cantantes y sus canciones (ver beginSession). */
 export function createSession(): Session {
   const id = crypto.randomUUID()
   const startedAt = Date.now()
-  db.insert(sessions).values({ id, startedAt }).run()
-  return { id, startedAt }
+  const status: SessionStatus = 'armando'
+  db.insert(sessions).values({ id, startedAt, status }).run()
+  return { id, startedAt, status }
+}
+
+/** Pasa la sesión de 'armando' a 'corriendo'. El caller ya validó que haya
+ * al menos un cantante y una canción encolada. */
+export function beginSession(sessionId: string): Session | null {
+  const status: SessionStatus = 'corriendo'
+  db.update(sessions).set({ status }).where(eq(sessions.id, sessionId)).run()
+  const row = db.select().from(sessions).where(eq(sessions.id, sessionId)).get()
+  return row ? toWireSession(row) : null
 }
 
 /** Borra (DB) todo lo que pertenece a la sesión: sus cantantes, la cola/
@@ -266,11 +327,27 @@ export function listSessionSingers(sessionId: string): Singer[] {
     .map(toWireSinger)
 }
 
-export function createSinger(sessionId: string, name: string, photoPath: string | null): Singer {
+export function createSinger(
+  sessionId: string,
+  name: string,
+  photoPath: string | null,
+  oval: Singer['oval'] = null,
+): Singer {
   const id = crypto.randomUUID()
   const cleanName = name.trim() || 'Invitado'
-  db.insert(singers).values({ id, sessionId, name: cleanName, photoPath, createdAt: Date.now() }).run()
-  return { id, name: cleanName, photoUrl: resolveMediaUrl(photoPath) }
+  db.insert(singers)
+    .values({
+      id,
+      sessionId,
+      name: cleanName,
+      photoPath,
+      ovalCx: oval?.cx ?? null,
+      ovalCy: oval?.cy ?? null,
+      ovalScale: oval?.scale ?? null,
+      createdAt: Date.now(),
+    })
+    .run()
+  return { id, name: cleanName, photoUrl: resolveMediaUrl(photoPath), oval }
 }
 
 const UNASSIGNED_SINGER_NAME = 'Sin asignar'
@@ -361,6 +438,51 @@ export function addToQueue(songId: string, singerId: string): QueueItem | null {
   return toWireQueueItem(row, song, singer)
 }
 
+/** Encola varias canciones para un mismo cantante de una (el paso "elegí sus
+ * canciones" del armado guiado). Mismo criterio de posiciones que
+ * addPlaylistToQueue: se calcula el máximo una vez y se appendea en orden,
+ * todo en una transacción. @returns cuántas se encolaron. */
+export function addSongsToQueue(songIds: string[], singerId: string): number {
+  const singerRow = db.select().from(singers).where(eq(singers.id, singerId)).get()
+  if (!singerRow) return 0
+  const validSongIds = songIds.filter((id) => getSongById(id) !== null)
+  if (validSongIds.length === 0) return 0
+  const maxPos = db
+    .select({ max: sql<number>`max(${queueItems.position})` })
+    .from(queueItems)
+    .where(eq(queueItems.status, 'queued'))
+    .get()
+  let position = (maxPos?.max ?? -1) + 1
+  const now = Date.now()
+  db.transaction((tx) => {
+    for (const songId of validSongIds) {
+      tx.insert(queueItems)
+        .values({
+          id: crypto.randomUUID(),
+          songId,
+          singerId,
+          status: 'queued',
+          score: null,
+          position: position++,
+          createdAt: now,
+        })
+        .run()
+    }
+  })
+  return validSongIds.length
+}
+
+/** Cuántas canciones tiene encoladas o ya cantadas cada cantante — el armado
+ * guiado lo usa para mostrar el progreso por cantante. */
+export function countQueuedSongsBySinger(): Record<string, number> {
+  const rows = db
+    .select({ singerId: queueItems.singerId, count: sql<number>`count(*)` })
+    .from(queueItems)
+    .groupBy(queueItems.singerId)
+    .all()
+  return Object.fromEntries(rows.map((r) => [r.singerId, r.count]))
+}
+
 /** Solo se puede sacar de la cola algo que todavía no empezó a cantarse. */
 export function removeFromQueue(id: string): boolean {
   const result = db
@@ -368,6 +490,45 @@ export function removeFromQueue(id: string): boolean {
     .where(and(eq(queueItems.id, id), eq(queueItems.status, 'queued')))
     .run()
   return result.changes > 0
+}
+
+/** Reparte las canciones en espera alternando cantante por cantante — el
+ * orden de turnos sale del orden de aparición de cada cantante en la cola
+ * (que después del wizard es el orden en que se cargaron), no de un campo
+ * aparte. No toca 'playing' ni 'done': solo reordena lo que todavía no
+ * cantó. El reordenamiento manual del admin (moveQueueItem) manda después
+ * de esto — nunca se vuelve a intercalar solo. */
+export function interleaveQueue(): void {
+  const queued = db
+    .select()
+    .from(queueItems)
+    .where(eq(queueItems.status, 'queued'))
+    .orderBy(asc(queueItems.position))
+    .all()
+  if (queued.length === 0) return
+
+  const bySinger = new Map<string, typeof queued>()
+  for (const item of queued) {
+    const bucket = bySinger.get(item.singerId)
+    if (bucket) bucket.push(item)
+    else bySinger.set(item.singerId, [item])
+  }
+  const buckets = [...bySinger.values()]
+
+  const interleaved: typeof queued = []
+  let round = 0
+  while (interleaved.length < queued.length) {
+    for (const bucket of buckets) {
+      if (round < bucket.length) interleaved.push(bucket[round])
+    }
+    round++
+  }
+
+  db.transaction((tx) => {
+    interleaved.forEach((item, position) => {
+      tx.update(queueItems).set({ position }).where(eq(queueItems.id, item.id)).run()
+    })
+  })
 }
 
 /** Intercambia posición con el vecino de arriba/abajo dentro de 'queued'. */
@@ -420,12 +581,14 @@ export function advanceQueue(): QueueItem | null {
   return toWireQueueItem({ ...next, status: 'playing' }, song, toWireSinger(singerRow))
 }
 
-/** Solo se puntúa algo que ya terminó de cantarse. */
+/** Se puede puntuar mientras suena ('playing') o ya terminada ('done') —
+ * editable hasta que se avanza a la siguiente. Lo único que queda afuera es
+ * 'queued': no tiene sentido puntuar algo que todavía no se cantó. */
 export function scoreQueueItem(id: string, score: number): boolean {
   const result = db
     .update(queueItems)
     .set({ score })
-    .where(and(eq(queueItems.id, id), eq(queueItems.status, 'done')))
+    .where(and(eq(queueItems.id, id), sql`${queueItems.status} != 'queued'`))
     .run()
   return result.changes > 0
 }
@@ -566,4 +729,38 @@ export function getLeaderboard(): LeaderboardEntry[] {
         : null
     })
     .filter((x): x is LeaderboardEntry => x !== null)
+}
+
+// --- banners del carrusel de Inicio -------------------------------------
+
+function toWireBanner(row: typeof banners.$inferSelect): Banner {
+  return { id: row.id, imageUrl: `/library/${row.imagePath}` }
+}
+
+export function listBanners(): Banner[] {
+  return db.select().from(banners).orderBy(asc(banners.position)).all().map(toWireBanner)
+}
+
+export function createBanner(imagePath: string): Banner {
+  const id = crypto.randomUUID()
+  const maxPos = db.select({ max: sql<number>`max(${banners.position})` }).from(banners).get()
+  const position = (maxPos?.max ?? -1) + 1
+  db.insert(banners).values({ id, imagePath, position, createdAt: Date.now() }).run()
+  return { id, imageUrl: `/library/${imagePath}` }
+}
+
+/** @returns el imagePath borrado (para que el caller limpie el archivo), o null si no existía. */
+export function deleteBanner(id: string): string | null {
+  const row = db.select().from(banners).where(eq(banners.id, id)).get()
+  if (!row) return null
+  db.delete(banners).where(eq(banners.id, id)).run()
+  return row.imagePath
+}
+
+export function setBannerOrder(ids: string[]): void {
+  db.transaction((tx) => {
+    ids.forEach((id, position) => {
+      tx.update(banners).set({ position }).where(eq(banners.id, id)).run()
+    })
+  })
 }

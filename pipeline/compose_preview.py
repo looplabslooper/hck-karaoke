@@ -36,8 +36,13 @@ def interpolate(frames_data: list[dict], t: float) -> dict | None:
     sosteniendo el primero/último fuera de rango. Misma lógica que
     template-editor.html (que puede producir un transform.json disperso, a
     mano) y que el futuro compositor en vivo — así este script prueba el
-    mismo camino que se va a usar de verdad, no uno más denso/artificial."""
-    frames = [f for f in frames_data if f["cx"] is not None]
+    mismo camino que se va a usar de verdad, no uno más denso/artificial.
+
+    `visible=False` marca un tramo sin detección confiable — track_color.py
+    puede seguir escribiendo cx/cy ahí (arrastrados internamente), así que
+    filtrar solo por "no es None" no alcanza: hay que exigir visible=True
+    también, si no el óvalo salta a donde el tracker perdió la máscara."""
+    frames = [f for f in frames_data if f["visible"] and f["cx"] is not None]
     if not frames:
         return None
     if t <= frames[0]["t"]:

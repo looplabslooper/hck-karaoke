@@ -1,32 +1,67 @@
 /*
-  Concepto: "HCK Karaoke" — panel oscuro casi negro con un único acento
-  violeta (nunca dos colores de marca compitiendo). Rojo solo para acciones
-  destructivas, verde solo para confirmaciones — nunca decorativos.
-  Tipografía: Plus Jakarta Sans en todos lados, la jerarquía la da el peso,
-  no la familia.
+  Sistema "Nocturne" (ver High Class Karaoke Redesign/_ds/nocturne.../readme.md):
+  fondo azulado casi negro, un único acento blurple usado como línea/glow, no
+  como flood. Botones outline, no rellenos. Radios 8px, densidad compacta.
+  Se mantienen los NOMBRES de variable ya usados en todo este archivo
+  (--bg, --surface, --accent, etc.) y solo se les cambia el valor — así no
+  hace falta tocar cada regla que ya las consume, solo lo que necesita las
+  rampas nuevas para los primitivos (.btn/.card/.tag).
+  Rojo solo para acciones destructivas, verde solo para confirmaciones.
+  Tipografía: Inter en todos lados, la jerarquía la da el peso, no la familia.
 */
 :root {
-  --bg: #0f1115;
-  --surface: #171a21;
-  --surface2: #1d2128;
-  --surface3: #252a33;
-  --border: rgba(255, 255, 255, 0.08);
-  --text: #f5f5f7;
-  --text-secondary: #9ca3af;
-  --text-dim: #6b7280;
-  --accent: #8b5cf6;
-  --accent-hover: #7c3aed;
-  --accent-soft: rgba(139, 92, 246, 0.14);
-  --info: #60a5fa;
+  --bg: #161826;
+  --surface: #232532;
+  --surface2: #292b31;
+  --surface3: #3f424d;
+  --border: rgba(233, 233, 237, 0.16);
+  --text: #e9e9ed;
+  --text-secondary: #b2b6ca;
+  --text-dim: #75798c;
+  --accent: #9184d9;
+  --accent-hover: #796cbf;
+  --accent-soft: rgba(145, 132, 217, 0.14);
+  --info: #b5abfc;
   --danger: #f87171;
   --success: #4ade80;
-  --radius: 14px;
-  --radius-sm: 10px;
-  --font-display: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif;
-  --font-body: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif;
-  --font-mono: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif;
+  --radius: 8px;
+  --radius-sm: 4px;
+  --radius-lg: 14px;
+  /* Escala de espaciado real del sistema (0.7x sobre una base de 8px, ver
+     styles.css del design system) — densidad compacta a propósito. */
+  --space-1: 2.8px;
+  --space-2: 5.6px;
+  --space-3: 8.4px;
+  --space-4: 11.2px;
+  --space-6: 16.8px;
+  --space-8: 22.4px;
+  --font-display: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-body: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'Inter', ui-sans-serif, system-ui, sans-serif;
   --sung: var(--accent);
   --unsung: var(--text-dim);
+
+  /* Rampas tonales (OKLCH en el sistema original, acá solo los valores
+     finales) — para los primitivos nuevos (.btn/.card/.tag/.dialog). El resto
+     del archivo sigue usando los tokens de arriba. */
+  --color-neutral-100: #f3f5fe;
+  --color-neutral-200: #e4e7f5;
+  --color-neutral-300: #cfd3e5;
+  --color-neutral-400: #b2b6ca;
+  --color-neutral-500: #9397ab;
+  --color-neutral-600: #75798c;
+  --color-neutral-700: #595d6c;
+  --color-neutral-800: #3f424d;
+  --color-neutral-900: #292b31;
+  --color-accent-100: #f5f4ff;
+  --color-accent-200: #e7e5fe;
+  --color-accent-300: #d2cefd;
+  --color-accent-400: #b5abfc;
+  --color-accent-500: #968ae0;
+  --color-accent-600: #796cbf;
+  --color-accent-700: #5d5294;
+  --color-accent-800: #423a6a;
+  --color-accent-900: #2b2741;
 }
 
 * {
@@ -54,8 +89,8 @@ body::before {
   inset: 0;
   pointer-events: none;
   z-index: 0;
-  background: radial-gradient(circle at 15% 0%, rgba(139, 92, 246, 0.16), transparent 55%),
-    radial-gradient(circle at 100% 100%, rgba(139, 92, 246, 0.1), transparent 50%);
+  background: radial-gradient(circle at 15% 0%, rgba(145, 132, 217, 0.16), transparent 55%),
+    radial-gradient(circle at 100% 100%, rgba(145, 132, 217, 0.1), transparent 50%);
 }
 
 :focus-visible {
@@ -64,13 +99,40 @@ body::before {
   border-radius: 4px;
 }
 
+/* Escala tipográfica del design system (styles.css: h1 42px ... h6 13px). */
 h1,
-h2 {
+h2,
+h3,
+h4,
+h5,
+h6 {
   font-family: var(--font-display);
-  font-weight: 800;
-  letter-spacing: -0.01em;
+  font-weight: 500;
+  line-height: 1.12;
+  letter-spacing: -0.015em;
   text-wrap: balance;
   margin: 0;
+}
+
+h1 {
+  font-size: 42px;
+}
+h2 {
+  font-size: 32px;
+}
+h3 {
+  font-size: 25px;
+}
+h4 {
+  font-size: 20px;
+}
+h5 {
+  font-size: 16px;
+}
+h6 {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
 .app {
@@ -122,9 +184,21 @@ h2 {
 
 /* Overlay transitorio de "cara en el escenario" (atajo T en pantalla
    completa) — por encima de todo, incluido .baked-video-stage (60) y
-   .modal-backdrop (700). */
+   .modal-backdrop (700).
+
+   El <video> fuente NO puede llevar `display:none`: sin caja de layout,
+   Chromium pausa la decodificación del video (no tiene dónde "pintarlo"),
+   así que se queda clavado en el primer frame — el bug real detrás de
+   "el video queda colgado". Se mantiene en el árbol de render con tamaño
+   mínimo y opacity 0 en vez de sacarlo del todo. */
 .face-swap-overlay video {
-  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .face-swap-overlay canvas {
@@ -145,13 +219,12 @@ h2 {
 
 .playlist-card {
   background: var(--surface);
-  border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 1.1rem 1.2rem;
 }
 
 .playlist-card.is-open {
-  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
   grid-column: 1 / -1;
 }
 
@@ -160,11 +233,11 @@ h2 {
    ningún diseño propio, se reusa lo que ya existía a propósito). */
 .hub-card {
   cursor: pointer;
-  transition: border-color 0.15s ease, transform 0.15s ease;
+  transition: box-shadow 0.15s ease, transform 0.15s ease;
 }
 
 .hub-card:hover {
-  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
   transform: translateY(-1px);
 }
 
@@ -671,6 +744,89 @@ nav {
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
+/* Armando: el show todavía no arrancó. Ámbar en vez de verde para que se
+   distinga de un vistazo de "en vivo". */
+.session-dot.armando {
+  background: #f5b83d;
+  box-shadow: 0 0 0 3px rgba(245, 184, 61, 0.16);
+}
+
+.session-box.is-armando {
+  box-shadow: 0 0 0 1px rgba(245, 184, 61, 0.35);
+}
+
+.session-box.is-corriendo {
+  box-shadow: 0 0 0 1px rgba(74, 222, 128, 0.3);
+}
+
+/* Volver a la sesión en curso desde cualquier pantalla. */
+.session-return {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  display: block;
+  padding: 0.15rem 0;
+  border-radius: var(--radius-sm);
+}
+
+.session-return:hover .session-status {
+  color: var(--text);
+}
+
+.session-meta {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  margin-top: 0.2rem;
+}
+
+.session-box .btn-block + .btn-block {
+  margin-top: 0;
+}
+
+/* Llamado a la acción cuando no hay ninguna sesión — reemplaza los paneles
+   vacíos que antes no ofrecían ningún camino. */
+.session-cta {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 0.6rem;
+  padding: 3rem 1.5rem;
+  background: var(--surface);
+  border-radius: var(--radius);
+  color: var(--accent);
+}
+
+.session-cta h2 {
+  font-size: 20px;
+  color: var(--text);
+}
+
+.session-cta .hint {
+  max-width: 46ch;
+  margin: 0;
+}
+
+.session-cta .btn-primary {
+  margin-top: 0.5rem;
+}
+
+.session-armando-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: var(--space-4) var(--space-6);
+  margin-bottom: 1.25rem;
+  border-radius: var(--radius);
+  background: rgba(245, 184, 61, 0.1);
+  box-shadow: 0 0 0 1px rgba(245, 184, 61, 0.3);
+}
+
+.session-armando-banner .hint {
+  margin: 0.15rem 0 0;
+}
+
 /* --- SingerPicker --------------------------------------------------- */
 
 .singer-picker-input-wrap {
@@ -737,6 +893,113 @@ nav {
   transform: scaleX(-1); /* espejado, como mirarse a un espejo */
 }
 
+/* --- Calibración del óvalo de cara ----------------------------------- */
+
+.oval-calib .hint {
+  margin: 0 0 0.75rem;
+}
+
+.oval-calib-panes {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  margin-bottom: 0.9rem;
+}
+
+.oval-calib-stage {
+  position: relative;
+  display: block;
+  max-width: 300px;
+  border-radius: var(--radius-sm);
+  /* Recorta el box-shadow gigante del óvalo, que es lo que oscurece todo lo
+     que queda afuera del recorte. */
+  overflow: hidden;
+  background: #000;
+  touch-action: none; /* el arrastre lo maneja el pointer handler, no el scroll */
+  user-select: none;
+}
+
+.oval-calib-stage img {
+  display: block;
+  width: 100%;
+  height: auto;
+  -webkit-user-drag: none;
+}
+
+/* El "spotlight": el óvalo en sí es transparente y su sombra difusa gigante
+   pinta todo el resto de la foto, así se lee de una qué parte se recorta. */
+.oval-calib-oval {
+  position: absolute;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  box-shadow: 0 0 0 9999px rgba(10, 11, 20, 0.62);
+  cursor: grab;
+}
+
+.oval-calib-stage.is-dragging .oval-calib-oval {
+  cursor: grabbing;
+  border-color: var(--color-accent-300);
+}
+
+.oval-calib-handle {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+  transition: transform 0.12s ease, background 0.12s ease;
+}
+
+.oval-calib-handle:hover {
+  transform: scale(1.25);
+  background: var(--color-accent-300);
+}
+
+/* Sobre las esquinas de la caja del óvalo (no sobre la curva) — es la
+   convención de cualquier herramienta de recorte. */
+.oval-calib-handle.handle-nw {
+  top: -7px;
+  left: -7px;
+  cursor: nwse-resize;
+}
+.oval-calib-handle.handle-ne {
+  top: -7px;
+  right: -7px;
+  cursor: nesw-resize;
+}
+.oval-calib-handle.handle-sw {
+  bottom: -7px;
+  left: -7px;
+  cursor: nesw-resize;
+}
+.oval-calib-handle.handle-se {
+  bottom: -7px;
+  right: -7px;
+  cursor: nwse-resize;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .oval-calib-handle {
+    transition: none;
+  }
+}
+
+.oval-calib-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.oval-calib-preview canvas {
+  display: block;
+  border-radius: var(--radius-sm);
+  background: #000;
+}
+
 .singer-photo-preview {
   display: flex;
   align-items: center;
@@ -777,8 +1040,11 @@ nav {
   margin-bottom: 1.5rem;
 }
 
+/* Los títulos de página del prototipo son <h2> semánticos (pageHead()) —
+   acá van dentro de un <h1>, así que se pisa el tamaño heredado (42px) por
+   el real de un título de página (32px). */
 .stage-head h1 {
-  font-size: 1.65rem;
+  font-size: 32px;
 }
 
 .stage-head p {
@@ -797,83 +1063,389 @@ nav {
 
 /* ---------- Botones genéricos ---------- */
 
+/* Nocturne: acciones primarias van con borde de acento sobre fondo
+   transparente, nunca rellenas — el fill se reserva para el acento como
+   línea/glow, no como flood (ver readme del sistema de diseño). */
 .btn-primary {
   all: unset;
+  box-sizing: border-box;
   cursor: pointer;
-  background: var(--accent);
-  color: #fff;
+  background: transparent;
+  border: 1px solid var(--accent);
+  color: var(--accent);
   font: inherit;
-  font-weight: 700;
-  font-size: 0.9rem;
-  padding: 0.65rem 1.3rem;
-  border-radius: 999px;
-  transition: background 0.15s ease;
+  font-weight: 600;
+  font-size: 14px;
+  padding: var(--space-2) calc(var(--space-3) * 1.2);
+  border-radius: var(--radius);
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
 .btn-primary:hover:not(:disabled) {
-  background: var(--accent-hover);
+  background: var(--accent-soft);
 }
 
 .btn-primary:disabled {
-  background: var(--surface3);
+  border-color: var(--border);
   color: var(--text-dim);
   cursor: default;
 }
 
 .btn-secondary {
   all: unset;
+  box-sizing: border-box;
   cursor: pointer;
-  background: var(--surface3);
+  background: transparent;
+  border: 1px solid var(--border);
   color: var(--text-secondary);
   font: inherit;
   font-weight: 600;
-  font-size: 0.9rem;
-  padding: 0.65rem 1.3rem;
-  border-radius: 999px;
+  font-size: 14px;
+  padding: var(--space-2) calc(var(--space-3) * 1.2);
+  border-radius: var(--radius);
+  transition: border-color 0.15s ease, color 0.15s ease;
 }
 
 .btn-secondary:hover:not(:disabled) {
+  border-color: var(--accent);
   color: var(--text);
+}
+
+.btn-secondary:disabled {
+  color: var(--text-dim);
+  cursor: default;
 }
 
 .btn-danger {
   all: unset;
+  box-sizing: border-box;
   cursor: pointer;
-  background: var(--danger);
-  color: #fff;
+  background: transparent;
+  border: 1px solid var(--danger);
+  color: var(--danger);
   font: inherit;
-  font-weight: 700;
-  font-size: 0.9rem;
-  padding: 0.65rem 1.3rem;
-  border-radius: 999px;
+  font-weight: 600;
+  font-size: 14px;
+  padding: var(--space-2) calc(var(--space-3) * 1.2);
+  border-radius: var(--radius);
+  transition: background 0.15s ease;
 }
 
 .btn-danger:hover:not(:disabled) {
-  filter: brightness(1.1);
+  background: rgba(248, 113, 113, 0.14);
 }
 
 .btn-danger:disabled {
-  background: var(--surface3);
+  border-color: var(--border);
   color: var(--text-dim);
   cursor: default;
 }
 
 .btn-toolbar {
   all: unset;
+  box-sizing: border-box;
   cursor: pointer;
-  background: var(--surface);
+  background: transparent;
   border: 1px solid var(--border);
   color: var(--text-secondary);
   font: inherit;
   font-weight: 600;
-  font-size: 0.82rem;
-  padding: 0.6rem 0.9rem;
-  border-radius: var(--radius-sm);
+  font-size: 13px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius);
   white-space: nowrap;
 }
 
 .btn-toolbar:hover {
   color: var(--text);
+  border-color: var(--accent);
+}
+
+/* Ghost: sin borde, para acciones secundarias dentro de un contexto ya
+   delimitado (headers de pantalla, back-links). */
+.btn-ghost {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+  font-size: 14px;
+  padding: var(--space-2) var(--space-1);
+  border-radius: var(--radius);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.btn-ghost:hover:not(:disabled) {
+  background: var(--surface2);
+  color: var(--text);
+}
+
+/* Icon-only: cuadrado, para acciones de fila repetidas muchas veces. */
+.btn-icon {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  border-radius: var(--radius);
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.btn-icon:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.btn-icon:disabled {
+  color: var(--text-dim);
+  cursor: default;
+}
+
+.btn-block {
+  display: flex;
+  width: 100%;
+  justify-content: center;
+}
+
+.btn-primary:focus-visible,
+.btn-secondary:focus-visible,
+.btn-danger:focus-visible,
+.btn-toolbar:focus-visible,
+.btn-ghost:focus-visible,
+.btn-icon:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ---------- Card (Studio, Fun Box, Categorías, chips de sesión) ---------- */
+
+/* Sin borde a propósito — el spec real distingue tarjetas por relleno de
+   superficie (y opcionalmente una sombra .elev-*), nunca por contorno. */
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+}
+
+.card-kicker {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--accent);
+  margin: 0;
+}
+
+.card-title {
+  font-size: 17px;
+  line-height: 1.2;
+  font-weight: 500;
+  font-family: var(--font-display);
+  color: var(--text);
+  margin: 0;
+}
+
+.card-body {
+  font-size: 13px;
+  color: var(--text);
+  opacity: 0.8;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.card-meta {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin: 0;
+}
+
+/* ---------- Tag ---------- */
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: calc(var(--radius) * 0.75);
+  white-space: nowrap;
+}
+
+.tag-accent {
+  background: var(--color-accent-800);
+  color: var(--color-accent-100);
+}
+
+.tag-neutral {
+  background: var(--color-neutral-800);
+  color: var(--color-neutral-100);
+}
+
+.tag-outline {
+  background: transparent;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+}
+
+/* ---------- Carrusel (Inicio) ---------- */
+
+.carousel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.carousel-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+}
+
+.carousel-head h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.carousel-count {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+
+.carousel-viewall {
+  margin-left: auto;
+  font-size: 0.8rem;
+}
+
+.carousel-nav {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.carousel-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 0.85rem;
+}
+
+@media (max-width: 1400px) {
+  .carousel-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+.carousel-card {
+  padding: 0.6rem;
+}
+
+.carousel-cover-wrap {
+  position: relative;
+}
+
+.carousel-cover {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: var(--radius-sm);
+}
+
+.carousel-play {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  background: var(--bg);
+}
+
+.carousel-queue-btn {
+  margin-top: 0.6rem;
+  font-size: 0.75rem;
+}
+
+.carousel-dots {
+  display: flex;
+  gap: 0.4rem;
+  justify-content: center;
+}
+
+.carousel-dot {
+  width: 20px;
+  height: 3px;
+  border-radius: 2px;
+  cursor: pointer;
+  background: var(--border);
+}
+
+.carousel-dot.active {
+  background: var(--accent);
+}
+
+/* ---------- Banner carousel (Inicio) ---------- */
+
+.banner-carousel {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 21 / 9;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.banner-carousel-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.banner-carousel-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(22, 24, 38, 0.6);
+  border-color: transparent;
+}
+
+.banner-carousel-nav.prev {
+  left: 12px;
+}
+
+.banner-carousel-nav.next {
+  right: 12px;
+}
+
+.banner-carousel-dots {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.banner-manage-card {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  padding: 0.6rem;
+}
+
+.banner-manage-thumb {
+  width: 160px;
+  aspect-ratio: 21 / 9;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  flex: none;
 }
 
 /* ---------- Biblioteca ---------- */
@@ -892,9 +1464,9 @@ nav {
   border: 1px solid var(--border);
   color: var(--text);
   font: inherit;
-  font-size: 0.88rem;
-  padding: 0.6rem 0.9rem;
-  border-radius: var(--radius-sm);
+  font-size: 14px;
+  padding: 6px 10px;
+  border-radius: var(--radius);
   outline: none;
 }
 
@@ -903,23 +1475,39 @@ nav {
   border: 1px solid var(--border);
   color: var(--text);
   font: inherit;
-  font-size: 0.88rem;
-  padding: 0.6rem 0.8rem;
-  border-radius: var(--radius-sm);
+  font-size: 14px;
+  padding: 6px 10px;
+  border-radius: var(--radius);
   outline: none;
   cursor: pointer;
 }
 
+.genre-select {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: var(--radius-sm);
+  outline: none;
+  cursor: pointer;
+  max-width: 100%;
+}
+
+.genre-select:hover {
+  border-color: var(--accent);
+}
+
 .library-table {
   background: var(--surface);
-  border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow: hidden;
 }
 
 .library-row {
   display: grid;
-  grid-template-columns: 1.4fr 1fr 0.8fr 110px 260px;
+  grid-template-columns: 1.4fr 1fr 0.9fr 0.8fr 110px 260px;
   align-items: center;
   gap: 0.75rem;
   padding: 0.9rem 1.2rem;
@@ -981,6 +1569,7 @@ nav {
 
 .row-play-btn {
   all: unset;
+  box-sizing: border-box;
   cursor: pointer;
   font-size: 0.78rem;
   font-weight: 700;
@@ -1001,6 +1590,7 @@ nav {
 
 .row-resync-btn {
   all: unset;
+  box-sizing: border-box;
   cursor: pointer;
   font-size: 0.95rem;
   color: var(--text-dim);
@@ -1014,6 +1604,7 @@ nav {
 
 .row-queue-btn {
   all: unset;
+  box-sizing: border-box;
   cursor: pointer;
   font-size: 0.72rem;
   font-weight: 700;
@@ -1030,6 +1621,7 @@ nav {
 
 .row-delete-btn {
   all: unset;
+  box-sizing: border-box;
   cursor: pointer;
   font-size: 0.85rem;
   line-height: 1;
@@ -1045,6 +1637,7 @@ nav {
    defecto, verde cuando está confirmada. */
 .row-verify-btn {
   all: unset;
+  box-sizing: border-box;
   cursor: pointer;
   font-size: 0.8rem;
   line-height: 1;
@@ -1075,27 +1668,224 @@ nav {
   position: fixed;
   inset: 0;
   z-index: 700;
-  background: rgba(0, 0, 0, 0.6);
+  background: rgba(15, 15, 20, 0.5);
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 1.5rem;
+  padding: var(--space-4);
 }
 
+/* max-width más ancho que el .dialog del spec (440px) — este panel también
+   aloja formularios de varios campos (wizard, SingerPicker), no solo
+   confirmaciones. */
 .modal-panel {
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 1.75rem;
+  border-radius: var(--radius-lg);
+  padding: var(--space-6);
   width: 100%;
   max-width: 560px;
   max-height: 85vh;
   overflow-y: auto;
+  box-shadow: 0 20px 60px -20px rgba(0, 0, 0, 0.6);
 }
 
 .modal-panel h2 {
-  font-size: 1.2rem;
-  margin-bottom: 0.5rem;
+  font-size: 20px;
+  margin-bottom: var(--space-2);
+}
+
+/* Entrada suave: el modal aparece con un fundido y un empujoncito, en vez de
+   materializarse de golpe. */
+@keyframes modal-backdrop-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes modal-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+}
+
+.modal-backdrop {
+  animation: modal-backdrop-in 0.16s ease;
+  backdrop-filter: blur(3px);
+}
+
+.modal-panel {
+  animation: modal-panel-in 0.18s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal-backdrop,
+  .modal-panel {
+    animation: none;
+  }
+}
+
+/* --- Armado guiado de la sesión --------------------------------------- */
+
+.wizard-modal {
+  max-width: 640px;
+}
+
+.wizard-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.1rem;
+}
+
+.wizard-modal-head h2 {
+  margin-bottom: 0.15rem;
+}
+
+.wizard-modal-head .hint {
+  margin: 0;
+}
+
+.wizard-dots {
+  display: flex;
+  gap: 5px;
+  flex-shrink: 0;
+  margin-top: 0.5rem;
+}
+
+.wizard-dot {
+  width: 18px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--surface3);
+}
+
+.wizard-dot.active {
+  background: var(--accent);
+}
+
+.wizard-singer-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: var(--space-3);
+  border-radius: var(--radius);
+  background: var(--surface2);
+  margin-bottom: 1rem;
+}
+
+.wizard-singer-banner .singer-thumb,
+.wizard-singer-banner .singer-chip-avatar {
+  width: 34px;
+  height: 34px;
+  font-size: 0.9rem;
+}
+
+.wizard-singer-banner .hint {
+  margin: 0;
+}
+
+.wizard-singer-banner .tag {
+  margin-left: auto;
+}
+
+.wizard-song-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 300px;
+  overflow-y: auto;
+  margin-bottom: 1rem;
+}
+
+.wizard-song-row {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.5rem 0.6rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.88rem;
+}
+
+.wizard-song-row:hover {
+  background: var(--surface2);
+}
+
+.wizard-song-row.is-picked {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.wizard-song-row .song-swatch {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+}
+
+.wizard-song-title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wizard-song-check {
+  width: 18px;
+  flex: none;
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wizard-roster {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-bottom: 1rem;
+}
+
+.wizard-roster-row {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.5rem 0.7rem;
+  border-radius: var(--radius-sm);
+  background: var(--surface2);
+}
+
+.wizard-roster-name {
+  flex: 1;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.wizard-warn {
+  padding: var(--space-4);
+  border-radius: var(--radius);
+  background: rgba(245, 184, 61, 0.1);
+  box-shadow: 0 0 0 1px rgba(245, 184, 61, 0.3);
+  font-size: 0.9rem;
+  margin: 0 0 1rem;
+}
+
+.wizard-syncing {
+  text-align: center;
+  padding: 1.5rem 0.5rem 0.5rem;
+}
+
+.wizard-syncing .hint {
+  margin: 0.4rem 0 1rem;
+}
+
+.wizard-syncing .progress-track {
+  margin-bottom: 0.6rem;
 }
 
 .no-results {
@@ -1294,10 +2084,35 @@ nav {
 
 .panel {
   background: var(--surface);
-  border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 1.75rem;
+  padding: var(--space-6);
   max-width: 620px;
+}
+
+.live-camera-panel {
+  margin-top: 1.25rem;
+}
+
+.live-camera-panel .card-title {
+  margin-bottom: 0.3rem;
+}
+
+.live-camera-panel .hint {
+  margin: 0 0 1rem;
+  max-width: 56ch;
+}
+
+.live-camera-actions {
+  display: flex;
+  gap: 0.6rem;
+  margin-top: 0.4rem;
+}
+
+.live-camera-panel .ok,
+.live-camera-panel .error {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
 }
 
 .field {
@@ -1308,18 +2123,20 @@ nav {
 }
 
 .field label {
-  font-size: 0.8rem;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 500;
   color: var(--text-secondary);
 }
 
 .field input[type='text'],
 .field textarea,
 .field select {
-  background: var(--surface2);
+  min-height: 36px;
+  background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 0.65rem 0.8rem;
+  border-radius: var(--radius);
+  padding: 6px 10px;
+  font-size: 14px;
   color: var(--text);
   font: inherit;
   outline: none;
@@ -1414,6 +2231,7 @@ nav {
 
 .lyrics-overlay-close {
   all: unset;
+  box-sizing: border-box;
   pointer-events: auto;
   cursor: pointer;
   background: rgba(255, 255, 255, 0.12);
@@ -1611,6 +2429,7 @@ nav {
 
 .pill-btn {
   all: unset;
+  box-sizing: border-box;
   cursor: pointer;
   font-size: 0.75rem;
   font-weight: 700;
@@ -1637,13 +2456,52 @@ nav {
 
 /* ---------- Cola en vivo + puntajes ---------- */
 
+.singer-chip-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.25rem;
+}
+
+.singer-chip-label {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  margin-right: 0.2rem;
+}
+
+.singer-chip {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.3rem 0.7rem 0.3rem 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.singer-chip-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface3);
+  color: var(--text);
+  font-size: 0.75rem;
+  font-weight: 700;
+  flex: none;
+}
+
 .queue-now-card {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
   background: var(--accent-soft);
-  border: 1px solid rgba(139, 92, 246, 0.3);
+  border: 1px solid rgba(145, 132, 217, 0.3);
   border-radius: var(--radius);
   padding: 1.25rem 1.5rem;
   margin-bottom: 1.5rem;
@@ -1702,7 +2560,6 @@ nav {
 
 .queue-panel {
   background: var(--surface);
-  border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 1.25rem 1.5rem;
 }
@@ -1710,6 +2567,67 @@ nav {
 .queue-panel h2 {
   font-size: 1rem;
   margin-bottom: 0.9rem;
+}
+
+.facepanel {
+  margin-bottom: 1.5rem;
+}
+
+.facepanel h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.4rem;
+}
+
+.facepanel .hint {
+  margin: 0 0 0.9rem;
+}
+
+.facepanel-nophoto {
+  color: #f5b83d;
+}
+
+.facepanel-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 0.75rem;
+}
+
+.facepanel-card {
+  all: unset;
+  box-sizing: border-box;
+  position: relative;
+  cursor: pointer;
+  display: block;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  aspect-ratio: 3 / 4;
+  background: var(--surface2);
+  transition: box-shadow 0.15s ease;
+}
+
+.facepanel-card:hover {
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.facepanel-card:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.facepanel-card video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.facepanel-key {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 1;
 }
 
 .queue-list {
@@ -1771,6 +2689,7 @@ nav {
 
 .queue-move-btn {
   all: unset;
+  box-sizing: border-box;
   cursor: pointer;
   width: 22px;
   height: 22px;
@@ -1794,6 +2713,7 @@ nav {
 
 .queue-remove-btn {
   all: unset;
+  box-sizing: border-box;
   cursor: pointer;
   font-size: 0.72rem;
   font-weight: 700;
@@ -1810,6 +2730,7 @@ nav {
 
 .score-btn {
   all: unset;
+  box-sizing: border-box;
   cursor: pointer;
   width: 26px;
   height: 26px;
@@ -1828,9 +2749,30 @@ nav {
   color: #fff;
 }
 
+.score-btn.is-active {
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.queue-now-score {
+  margin-top: 0.75rem;
+}
+
+.queue-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.9rem;
+}
+
+.queue-panel-head h2 {
+  margin-bottom: 0;
+}
+
 .leaderboard-panel {
   background: var(--surface);
-  border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 1.25rem 1.5rem;
 }
@@ -1968,6 +2910,7 @@ nav {
 
 .sync-fix-btn {
   all: unset;
+  box-sizing: border-box;
   cursor: pointer;
   font-size: 0.68rem;
   font-weight: 700;
@@ -2055,4 +2998,171 @@ nav {
 
 .import-row {
   grid-template-columns: 1.4fr 1fr 1.6fr 140px;
+}
+
+/* --- Resultados de la sesión ------------------------------------------- */
+
+.results-modal {
+  max-width: 640px;
+  max-height: 88vh;
+}
+
+.results-warn {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+  padding: var(--space-4);
+  border-radius: var(--radius);
+  background: rgba(245, 184, 61, 0.1);
+  box-shadow: 0 0 0 1px rgba(245, 184, 61, 0.3);
+  color: #f5b83d;
+  margin-bottom: 1.1rem;
+}
+
+.results-warn strong {
+  color: var(--text);
+  display: block;
+  font-size: 0.9rem;
+}
+
+.results-warn p {
+  margin: 0.3rem 0 0;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.results-warn-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.7rem;
+}
+
+.results-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  margin-bottom: 1.25rem;
+}
+
+.results-toggle .seg-opt {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  padding: 0.4rem 1rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.results-toggle .seg-opt + .seg-opt {
+  border-left: 1px solid var(--border);
+}
+
+.results-toggle .seg-opt.is-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.podium {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  align-items: end;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+
+.podium-place {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 1.25rem 0.75rem 1rem;
+  border-radius: var(--radius);
+  background: var(--surface2);
+  text-align: center;
+}
+
+/* El del medio (1er puesto) queda más alto y con acento — el JSX ya arma el
+   array como [2do, 1ro, 3ro], así que el orden visual sale solo del DOM. */
+.podium-place.place-1 {
+  padding-top: 1.75rem;
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 1px rgba(139, 92, 246, 0.35);
+}
+
+.podium-rank {
+  font-size: 0.72rem;
+  font-weight: 800;
+  color: var(--text-dim);
+}
+
+.podium-place.place-1 .podium-rank {
+  color: var(--accent);
+}
+
+.podium-thumb {
+  width: 44px;
+  height: 44px;
+  font-size: 1rem;
+}
+
+.podium-place.place-1 .podium-thumb {
+  width: 56px;
+  height: 56px;
+  font-size: 1.2rem;
+}
+
+.podium-name {
+  font-weight: 700;
+  font-size: 0.88rem;
+}
+
+.podium-score {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.podium-place.place-1 .podium-score {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.results-rest {
+  max-height: 220px;
+  overflow-y: auto;
+  margin-bottom: 1.25rem;
+}
+
+/* --- Probar templates de Fun Box con un cantante real ------------------ */
+
+.funbox-test-hint {
+  margin-bottom: 1.25rem;
+}
+
+.funbox-test-picker {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 1.25rem;
+}
+
+.funbox-test-picker label {
+  margin: 0;
+}
+
+.funbox-test-picker select {
+  min-width: 200px;
+}
+
+.funbox-card-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.funbox-card-actions .btn-secondary,
+.funbox-card-actions .btn-danger {
+  flex: 1;
 }

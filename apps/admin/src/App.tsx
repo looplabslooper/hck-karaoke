@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState, type DragEvent, type FormEvent } from 'react'
 import type {
+  Banner,
+  CategoryId,
+  Genre,
   LeaderboardEntry,
   LyricsDoc,
   Playlist,
@@ -11,10 +14,18 @@ import type {
   Song,
   Template,
 } from '@kiosco/shared'
+import { GENRES, CATEGORIES } from '@kiosco/shared'
 import { LyricsView } from './LyricsView'
 import { CdgPlayer } from './CdgPlayer'
-import { SingerPicker } from './SingerPicker'
+import { SingerPicker, type SingerPickerValue } from './SingerPicker'
 import { FaceSwapOverlay } from './FaceSwapOverlay'
+import { warmFaceCutout, type Oval } from './faceSwapCache'
+import { CategoryCarousel } from './CategoryCarousel'
+import { BannerCarousel } from './BannerCarousel'
+import { SessionSetupWizard } from './SessionSetupWizard'
+import { SessionResults } from './SessionResults'
+import { songColor } from './songColor'
+import { Icon, type IconName } from './icons'
 
 // Kiosco de karaoke de una sola pantalla: navegación/biblioteca y el motor
 // de audio real (Web Audio) conviven en esta misma app — ver ROADMAP.md.
@@ -52,14 +63,6 @@ function formatTime(seconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`
 }
 
-// Color determinístico por canción (no tenemos un campo "color" en el
-// dominio) — mismo id, mismo tono, sin necesidad de guardarlo en la DB.
-function songColor(id: string): string {
-  let hash = 0
-  for (let i = 0; i < id.length; i++) hash = (hash << 5) - hash + id.charCodeAt(i)
-  const hue = Math.abs(hash) % 360
-  return `hsl(${hue}, 62%, 58%)`
-}
 
 // CD+G tiene su propia animación (canvas), pero el audio sigue siendo un
 // archivo aparte que necesita el motor de Web Audio de siempre — a
@@ -78,7 +81,10 @@ type Page =
   | 'generar'
   | 'subir'
   | 'fondo'
+  | 'funbox'
   | 'configuracion'
+  | 'categorias'
+  | 'banners'
   | 'importar'
 type WizardStep = 1 | 2 | 3 | 4
 
@@ -95,59 +101,12 @@ interface ImportCandidate {
 // Playlists queda fuera de la nav por ahora (a pedido explícito, "después
 // refinamos esto") — el código/página sigue vivo, solo no hay forma de
 // llegar ahí desde la UI todavía.
-const NAV_ITEMS: { id: Page; label: string; icon: JSX.Element }[] = [
-  {
-    id: 'inicio',
-    label: 'Inicio',
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-        <path d="M3 11l9-8 9 8" />
-        <path d="M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9" />
-      </svg>
-    ),
-  },
-  {
-    id: 'biblioteca',
-    label: 'Biblioteca de canciones',
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-        <rect x="3" y="4" width="7" height="16" rx="1.5" />
-        <rect x="14" y="4" width="7" height="10" rx="1.5" />
-      </svg>
-    ),
-  },
-  {
-    id: 'cola',
-    label: 'Sesión de Karaoke',
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-        <path d="M4 6h16M4 12h10M4 18h16" />
-        <circle cx="19" cy="12" r="2" />
-      </svg>
-    ),
-  },
-  {
-    id: 'studio',
-    label: 'Studio',
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-        <rect x="3" y="3" width="7" height="7" rx="1.5" />
-        <rect x="14" y="3" width="7" height="7" rx="1.5" />
-        <rect x="3" y="14" width="7" height="7" rx="1.5" />
-        <rect x="14" y="14" width="7" height="7" rx="1.5" />
-      </svg>
-    ),
-  },
-  {
-    id: 'configuracion',
-    label: 'Configuración',
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-        <circle cx="12" cy="12" r="3.2" />
-        <path d="M12 4v2.4M12 17.6V20M4 12h2.4M17.6 12H20M6.3 6.3l1.7 1.7M16 16l1.7 1.7M17.7 6.3 16 8M8 16l-1.7 1.7" />
-      </svg>
-    ),
-  },
+const NAV_ITEMS: { id: Page; label: string; icon: IconName }[] = [
+  { id: 'inicio', label: 'Inicio', icon: 'home' },
+  { id: 'biblioteca', label: 'Biblioteca de canciones', icon: 'search' },
+  { id: 'cola', label: 'Sesión de Karaoke', icon: 'list' },
+  { id: 'studio', label: 'Studio', icon: 'wand' },
+  { id: 'configuracion', label: 'Configuración', icon: 'gear' },
 ]
 
 const LANGUAGE_OPTIONS: { value: string; label: string }[] = [
@@ -158,6 +117,17 @@ const LANGUAGE_OPTIONS: { value: string; label: string }[] = [
   { value: 'it', label: 'Italiano' },
   { value: 'de', label: 'Alemán' },
 ]
+
+/** `srcObject` no es una prop de JSX — hay que asignarlo a mano sobre el
+ * elemento montado, mismo patrón que ya usa SingerPicker para la cámara. */
+function LiveBackgroundVideo({ stream }: { stream: MediaStream }) {
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+  useEffect(() => {
+    if (videoRef.current) videoRef.current.srcObject = stream
+  }, [stream])
+  // eslint-disable-next-line jsx-a11y/media-has-caption
+  return <video ref={videoRef} className="background-video" muted autoPlay playsInline />
+}
 
 export function App() {
   const [page, setPage] = useState<Page>('inicio')
@@ -181,8 +151,20 @@ export function App() {
   const [playError, setPlayError] = useState<string | null>(null)
   const [backgroundVideoUrl, setBackgroundVideoUrl] = useState<string | null>(null)
 
-  // Inicio: muestra al azar del catálogo, para invitar a explorar.
-  const [randomSongs, setRandomSongs] = useState<Song[]>([])
+  // Fondo en vivo (cámara virtual de OBS u otra cámara/captura): cuando está
+  // activa tapa al video de fondo subido, mientras dure — se apaga a mano,
+  // no se ata al ciclo de vida de la sesión ni de pantalla completa.
+  const [cameraDevices, setCameraDevices] = useState<MediaDeviceInfo[]>([])
+  const [selectedCameraId, setSelectedCameraId] = useState('')
+  const [liveCameraStream, setLiveCameraStream] = useState<MediaStream | null>(null)
+  const [liveCameraError, setLiveCameraError] = useState<string | null>(null)
+
+  // Inicio: hasta 3 categorías elegidas en Configuración → Categorías de inicio.
+  const [homeCategories, setHomeCategories] = useState<CategoryId[]>([])
+  // Banners del carrusel de Inicio (ver PROMPTS-BANNERS.md) — lista abierta,
+  // se suben/borran/reordenan desde Configuración → Banners de inicio.
+  const [banners, setBanners] = useState<Banner[]>([])
+  const [bannerUploading, setBannerUploading] = useState(false)
 
   // Biblioteca: búsqueda + filtro por calidad de sincronía + orden + paginado
   // server-side — con catálogos de miles de canciones (ej. un importado
@@ -196,6 +178,7 @@ export function App() {
   const [sortAsc, setSortAsc] = useState(true)
   const [songsTotal, setSongsTotal] = useState(0)
   const [songsLoading, setSongsLoading] = useState(false)
+  const [libraryView, setLibraryView] = useState<'list' | 'grid'>('list')
 
   // Modal de re-sincronización (letra y/o idioma mal — sin tocar el audio)
   const [resyncSong, setResyncSong] = useState<Song | null>(null)
@@ -218,6 +201,7 @@ export function App() {
   const [pushSingerId, setPushSingerId] = useState<string | null>(null)
   const [pushSingerName, setPushSingerName] = useState('')
   const [pushSingerPhoto, setPushSingerPhoto] = useState<Blob | null>(null)
+  const [pushSingerOval, setPushSingerOval] = useState<Oval | null>(null)
   const [playlistMessage, setPlaylistMessage] = useState<string | null>(null)
 
   // Sesión de karaoke: agrupa cantantes+fotos+cola+puntajes, como mucho una
@@ -225,6 +209,25 @@ export function App() {
   const [session, setSession] = useState<Session | null>(null)
   const [sessionSingers, setSessionSingers] = useState<Singer[]>([])
   const [templates, setTemplates] = useState<Template[]>([])
+  // El wizard de armado se abre solo mientras la sesión está en 'armando',
+  // pero se puede cerrar para mirar la Biblioteca y volver — de ahí que sea
+  // estado propio y no derivado puro de session.status.
+  const [showWizard, setShowWizard] = useState(false)
+  // Pantalla de resultados al terminar — separado de session.status porque
+  // se abre ANTES de borrar nada (ver handleEndSession/handleCloseSession).
+  const [showResults, setShowResults] = useState(false)
+  const [songCounts, setSongCounts] = useState<Record<string, number>>({})
+  const [funboxUploading, setFunboxUploading] = useState(false)
+  const [funboxError, setFunboxError] = useState<string | null>(null)
+  // Probar un template con la foto de un cantante real, sin depender de
+  // pantalla completa ni de una canción sonando — para poder distinguir "no
+  // mapea bien" de "no se ve nada" de "se queda en el primer frame".
+  const [testSingerId, setTestSingerId] = useState<string | null>(null)
+  const [testFaceSwap, setTestFaceSwap] = useState<{
+    template: Template
+    photoUrl: string
+    oval: Singer['oval']
+  } | null>(null)
 
   // Cola en vivo + puntajes
   const [queue, setQueue] = useState<QueueItem[]>([])
@@ -234,6 +237,7 @@ export function App() {
   const [queueSingerId, setQueueSingerId] = useState<string | null>(null)
   const [queueSingerName, setQueueSingerName] = useState('')
   const [queueSingerPhoto, setQueueSingerPhoto] = useState<Blob | null>(null)
+  const [queueSingerOval, setQueueSingerOval] = useState<Oval | null>(null)
 
   // Wizard "Agregar canción nueva"
   const [wizardStep, setWizardStep] = useState<WizardStep>(1)
@@ -310,9 +314,45 @@ export function App() {
     return params.toString()
   }
 
-  async function refreshRandomSongs() {
-    const res = await fetch('/api/songs/random?limit=10')
-    setRandomSongs(await res.json())
+  async function refreshHomeCategories() {
+    const res = await fetch('/api/settings/home-categories')
+    setHomeCategories(await res.json())
+  }
+
+  async function refreshBanners() {
+    const res = await fetch('/api/banners')
+    setBanners(await res.json())
+  }
+
+  async function handleUploadBanner(file: File) {
+    setBannerUploading(true)
+    try {
+      const form = new FormData()
+      form.set('image', file)
+      await fetch('/api/banners', { method: 'POST', body: form })
+      refreshBanners()
+    } finally {
+      setBannerUploading(false)
+    }
+  }
+
+  async function handleDeleteBanner(id: string) {
+    await fetch(`/api/banners/${id}`, { method: 'DELETE' })
+    refreshBanners()
+  }
+
+  async function reorderBanner(id: string, dir: 'up' | 'down') {
+    const i = banners.findIndex((b) => b.id === id)
+    const j = dir === 'up' ? i - 1 : i + 1
+    if (j < 0 || j >= banners.length) return
+    const next = [...banners]
+    ;[next[i], next[j]] = [next[j], next[i]]
+    setBanners(next)
+    await fetch('/api/banners/reorder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: next.map((b) => b.id) }),
+    })
   }
 
   /** Vuelve a pedir la primera página con los filtros actuales — se usa al
@@ -343,14 +383,16 @@ export function App() {
   }
 
   async function refreshQueue() {
-    const [queueRes, unscoredRes, leaderboardRes] = await Promise.all([
+    const [queueRes, unscoredRes, leaderboardRes, countsRes] = await Promise.all([
       fetch('/api/queue'),
       fetch('/api/queue/unscored'),
       fetch('/api/leaderboard'),
+      fetch('/api/queue/counts'),
     ])
     setQueue(await queueRes.json())
     setUnscored(await unscoredRes.json())
     setLeaderboard(await leaderboardRes.json())
+    setSongCounts(await countsRes.json())
   }
 
   // --- Sesión de karaoke ----------------------------------------------------
@@ -367,15 +409,70 @@ export function App() {
     setTemplates(await res.json())
   }
 
-  async function handleStartSession() {
-    await fetch('/api/sessions/start', { method: 'POST' })
-    refreshSession()
-    refreshQueue()
+  /** Sube un video crudo y corre el tracking por color en el server (ver
+   * pipeline/track_color.py) — sin esto habría que pasar por /template-editor
+   * o la terminal a mano. */
+  async function handleUploadTemplate(file: File) {
+    setFunboxUploading(true)
+    setFunboxError(null)
+    try {
+      const form = new FormData()
+      form.set('video', file)
+      const res = await fetch('/api/templates', { method: 'POST', body: form })
+      const body = await res.json()
+      if (!res.ok) throw new Error(body.error ?? 'No se pudo mapear el video')
+      refreshTemplates()
+    } catch (err) {
+      setFunboxError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setFunboxUploading(false)
+    }
   }
 
-  async function handleEndSession() {
-    if (!confirm('¿Terminar la sesión? Se borran los cantantes, sus fotos y la cola/puntajes — no se puede deshacer.')) return
+  async function handleDeleteTemplate(id: string) {
+    await fetch(`/api/templates/${id}`, { method: 'DELETE' })
+    refreshTemplates()
+  }
+
+  /** Crea la sesión en estado 'armando' y abre el armado guiado — antes esto
+   * solo creaba la fila y dejaba al operador en una pantalla vacía sin
+   * ninguna acción evidente para cargar al primer cantante. */
+  async function handleStartSession() {
+    await fetch('/api/sessions/start', { method: 'POST' })
+    await Promise.all([refreshSession(), refreshQueue()])
+    setPage('cola')
+    setShowWizard(true)
+  }
+
+  /** Vuelve a la sesión en curso desde cualquier pantalla; si todavía se está
+   * armando, reabre el wizard donde había quedado. */
+  function handleGoToSession() {
+    setPage('cola')
+    if (session?.status === 'armando') setShowWizard(true)
+  }
+
+  async function handleBeginSession() {
+    const res = await fetch('/api/sessions/begin', { method: 'POST' })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body.error ?? 'No se pudo comenzar la sesión.')
+    }
+    await Promise.all([refreshSession(), refreshQueue()])
+    setShowWizard(false)
+  }
+
+  /** "Terminar sesión" ya no borra directo: abre los resultados primero
+   * (calculados con los datos todavía vivos), y el borrado real queda para
+   * cuando el admin los cierra — ver handleCloseSession. */
+  function handleEndSession() {
+    if (!session) return
+    setShowResults(true)
+  }
+
+  async function handleCloseSession() {
     await fetch('/api/sessions/end', { method: 'POST' })
+    setShowResults(false)
+    setShowWizard(false)
     refreshSession()
     refreshQueue()
   }
@@ -430,7 +527,7 @@ export function App() {
 
   async function submitPushPlaylist() {
     if (!pushPlaylist) return
-    const singerId = await resolveSingerId(pushSingerName, pushSingerId, pushSingerPhoto)
+    const singerId = await resolveSingerId(pushSingerName, pushSingerId, pushSingerPhoto, pushSingerOval)
     const res = await fetch(`/api/playlists/${pushPlaylist.id}/add-to-queue`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -441,6 +538,7 @@ export function App() {
     setPushSingerId(null)
     setPushSingerName('')
     setPushSingerPhoto(null)
+    setPushSingerOval(null)
     if (res.ok) {
       setPlaylistMessage(`${body.added} canciones agregadas a la cola.`)
       refreshQueue()
@@ -463,7 +561,9 @@ export function App() {
     refreshPlaylists()
     refreshSession()
     refreshTemplates()
-    refreshRandomSongs()
+    refreshHomeCategories()
+    refreshBanners()
+    refreshCameraDevices()
 
     const ws = new WebSocket(`ws://${location.hostname}:8080/ws`)
     wsRef.current = ws
@@ -477,6 +577,22 @@ export function App() {
     return () => ws.close()
   }, [])
 
+  // Recién conectada la cámara virtual (OBS recién abierta, por ejemplo) el
+  // navegador no la lista hasta este evento — sin esto había que refrescar
+  // la página para verla en el selector.
+  useEffect(() => {
+    navigator.mediaDevices?.addEventListener('devicechange', refreshCameraDevices)
+    return () => navigator.mediaDevices?.removeEventListener('devicechange', refreshCameraDevices)
+  }, [])
+
+  // Suelta la cámara si el stream cambia o se desmonta el componente —
+  // sin esto el ícono de "cámara en uso" del navegador/OBS queda prendido.
+  useEffect(() => {
+    return () => {
+      liveCameraStream?.getTracks().forEach((t) => t.stop())
+    }
+  }, [liveCameraStream])
+
   // Búsqueda/filtro/orden pegan al server — debounce para no mandar un
   // request por tecla mientras se escribe.
   useEffect(() => {
@@ -488,6 +604,35 @@ export function App() {
     autoAdvanceRef.current = autoAdvance
   }, [autoAdvance])
 
+  // Un modal abierto se lleva el teclado: Escape lo cierra, y los atajos
+  // globales (espacio, flechas, hotkeys de cara) quedan en pausa para no
+  // dispararse por accidente mientras el operador está en un formulario.
+  const openModal = resyncSong ?? addToPlaylistSong ?? pushPlaylist ?? queueSong ?? deleteSong ?? null
+  const modalOpen = openModal !== null || showWizard || showResults
+
+  useEffect(() => {
+    if (openModal === null) return
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== 'Escape' || deleting) return
+      setResyncSong(null)
+      setAddToPlaylistSong(null)
+      setPushPlaylist(null)
+      setQueueSong(null)
+      setDeleteSong(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [openModal, deleting])
+
+  useEffect(() => {
+    if (!testFaceSwap) return
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setTestFaceSwap(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [testFaceSwap])
+
   // Atajos de teclado: el kiosco se opera de lejos, muchas veces sin mouse a
   // mano. Se ignoran mientras se escribe en un campo, para no robarle la
   // barra espaciadora a la búsqueda ni a la letra pegada en el wizard.
@@ -495,7 +640,7 @@ export function App() {
     function onKey(e: KeyboardEvent) {
       const el = e.target as HTMLElement | null
       const typing = !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)
-      if (typing) return
+      if (typing || modalOpen) return
 
       if (e.key === ' ') {
         e.preventDefault()
@@ -512,8 +657,9 @@ export function App() {
         seekPlayback(getPositionSeconds() - 5)
       } else if (e.key === 'n' || e.key === 'N') {
         handleAdvanceQueue()
-      } else if ((e.key === 't' || e.key === 'T') && kioskMode) {
-        triggerFaceSwapOverlay()
+      } else if (kioskMode && session && e.key >= '1' && e.key <= '9') {
+        const template = templates[Number(e.key) - 1]
+        if (template) triggerFaceSwap(template)
       }
     }
     window.addEventListener('keydown', onKey)
@@ -906,6 +1052,40 @@ export function App() {
     if (res.ok) form.reset()
   }
 
+  /** Los labels de los dispositivos (ej. "OBS Virtual Camera") solo vienen
+   * poblados después de que el sitio tuvo permiso de cámara alguna vez —
+   * por eso se reintenta después de un getUserMedia exitoso, además de al
+   * montar y cada vez que el SO conecta/desconecta un dispositivo. */
+  async function refreshCameraDevices() {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices()
+      setCameraDevices(devices.filter((d) => d.kind === 'videoinput'))
+    } catch {
+      // Sin permiso todavía o API no disponible — el selector queda vacío.
+    }
+  }
+
+  async function startLiveCamera() {
+    setLiveCameraError(null)
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: selectedCameraId ? { deviceId: { exact: selectedCameraId } } : true,
+      })
+      liveCameraStream?.getTracks().forEach((t) => t.stop())
+      setLiveCameraStream(stream)
+      refreshCameraDevices()
+    } catch {
+      setLiveCameraError(
+        'No se pudo acceder a la cámara — revisá el permiso del navegador y que OBS tenga la cámara virtual iniciada.',
+      )
+    }
+  }
+
+  function stopLiveCamera() {
+    liveCameraStream?.getTracks().forEach((t) => t.stop())
+    setLiveCameraStream(null)
+  }
+
   // --- Importar carpetas externas (biblioteca en disco, sin copiar) --------
 
   async function addImportRoot() {
@@ -1049,18 +1229,29 @@ export function App() {
     setQueueSingerId(null)
     setQueueSingerName('')
     setQueueSingerPhoto(null)
+    setQueueSingerOval(null)
   }
 
   /** Si ya se eligió un cantante existente (singerId), lo usa tal cual. Si
    * no, crea uno nuevo con el nombre/foto tipeados — así el operador no
    * tiene que pasar por un paso separado de "registrar cantante". */
-  async function resolveSingerId(name: string, singerId: string | null, photo: Blob | null): Promise<string | null> {
+  async function resolveSingerId(
+    name: string,
+    singerId: string | null,
+    photo: Blob | null,
+    oval: Oval | null,
+  ): Promise<string | null> {
     if (singerId) return singerId
     const trimmed = name.trim()
     if (!trimmed) return null
     const form = new FormData()
     form.set('name', trimmed)
     if (photo) form.set('photo', photo, 'photo.jpg')
+    if (oval) {
+      form.set('ovalCx', String(oval.cx))
+      form.set('ovalCy', String(oval.cy))
+      form.set('ovalScale', String(oval.scale))
+    }
     const res = await fetch('/api/singers', { method: 'POST', body: form })
     if (!res.ok) return null
     const singer: Singer = await res.json()
@@ -1069,7 +1260,7 @@ export function App() {
 
   async function submitAddToQueue() {
     if (!queueSong) return
-    const singerId = await resolveSingerId(queueSingerName, queueSingerId, queueSingerPhoto)
+    const singerId = await resolveSingerId(queueSingerName, queueSingerId, queueSingerPhoto, queueSingerOval)
     if (!singerId) return
     await fetch('/api/queue', {
       method: 'POST',
@@ -1095,6 +1286,15 @@ export function App() {
     refreshQueue()
   }
 
+  /** Reparte lo que queda en espera alternando cantante por cantante — para
+   * cuando se sumaron canciones en vivo y la cola quedó despareja. El show
+   * ya arranca alternado solo (ver handleBeginSession); esto es para
+   * después. */
+  async function handleInterleaveQueue() {
+    await fetch('/api/queue/interleave', { method: 'POST' })
+    refreshQueue()
+  }
+
   async function toggleSyncVerified(song: Song) {
     await fetch(`/api/songs/${song.id}/sync-verified`, {
       method: 'POST',
@@ -1103,6 +1303,16 @@ export function App() {
     })
     // Optimista: evita re-pedir la página entera solo por un toggle.
     setSongs((prev) => prev.map((s) => (s.id === song.id ? { ...s, syncVerified: !song.syncVerified } : s)))
+  }
+
+  /** Etiquetado de género a mano — ningún importador lo trae (ver Categorías de inicio). */
+  async function handleSetGenre(songId: string, genre: Genre | null) {
+    await fetch(`/api/songs/${songId}/genre`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ genre }),
+    })
+    setSongs((prev) => prev.map((s) => (s.id === songId ? { ...s, genre } : s)))
   }
 
   async function handleAdvanceQueue() {
@@ -1115,16 +1325,75 @@ export function App() {
   // template en vez de re-derivarlo de `queue` en cada render — si la
   // canción avanza mientras el overlay está en pantalla, no queremos que la
   // cara cambie a mitad de la animación.
-  const [activeFaceSwap, setActiveFaceSwap] = useState<{ template: Template; photoUrl: string } | null>(null)
+  const [activeFaceSwap, setActiveFaceSwap] = useState<{
+    template: Template
+    photoUrl: string
+    oval: Singer['oval']
+  } | null>(null)
 
-  function triggerFaceSwapOverlay() {
-    if (activeFaceSwap) return
+  function triggerFaceSwap(template: Template) {
+    // El panel se ve también fuera de pantalla completa (para previsualizar
+    // el mapeo antes de arrancar), pero el overlay solo se monta dentro de
+    // `{kioskMode && <div className="performance">...}` — sin este chequeo,
+    // clickear una tarjeta afuera de pantalla completa dejaba activeFaceSwap
+    // seteado para siempre (el overlay nunca montaba, `onDone` nunca se
+    // disparaba), bloqueando todo intento posterior hasta recargar la página.
+    if (!kioskMode || activeFaceSwap) return
     const playingItem = queue.find((q) => q.status === 'playing')
     if (!playingItem?.singerPhotoUrl) return
-    if (templates.length === 0) return
-    const template = templates[Math.floor(Math.random() * templates.length)]
-    setActiveFaceSwap({ template, photoUrl: playingItem.singerPhotoUrl })
+    const singer = sessionSingers.find((s) => s.id === playingItem.singerId)
+    setActiveFaceSwap({ template, photoUrl: playingItem.singerPhotoUrl, oval: singer?.oval ?? null })
   }
+
+  const singersWithPhoto = sessionSingers.filter((s): s is Singer & { photoUrl: string } => !!s.photoUrl)
+
+  /** Prueba un template de Fun Box con la foto de un cantante real de la
+   * sesión — mismo componente que el overlay en vivo, pero disparado desde
+   * Studio y sin pantalla completa, así se puede ver si mapea bien sin
+   * tener que estar en medio de un show para probarlo. */
+  function testFunboxTemplate(template: Template) {
+    if (testFaceSwap) return
+    const singer = singersWithPhoto.find((s) => s.id === testSingerId) ?? singersWithPhoto[0]
+    if (!singer) return
+    setTestFaceSwap({ template, photoUrl: singer.photoUrl, oval: singer.oval })
+  }
+
+  // Precalentado de "cara en el escenario": arranca solo al crear/recargar
+  // una sesión o al registrar un cantante nuevo (ambos casos cambian
+  // sessionSingers), para que el hotkey en vivo no tenga que esperar a
+  // recortar la foto en óvalo la primera vez que se dispara.
+  useEffect(() => {
+    sessionSingers.forEach((s) => {
+      if (s.photoUrl) warmFaceCutout(s.photoUrl, s.oval)
+    })
+  }, [sessionSingers])
+
+  // Mismo criterio para los videos de los templates: no dependen de qué
+  // cantante sea, así que alcanza con precalentarlos una vez al arrancar una
+  // sesión. Uno a la vez, con fetch() (no <video preload="auto">): un
+  // <video> buffereando queda con una conexión abierta indefinidamente, y
+  // Chrome limita a ~6 conexiones por origen — el <video> real del overlay
+  // terminaba en cola detrás de esas descargas y se quedaba colgado en el
+  // primer frame. fetch() completa y suelta la conexión antes de arrancar
+  // la siguiente, y deja el archivo en la cache HTTP para cuando se pida.
+  useEffect(() => {
+    if (!session) return
+    let cancelled = false
+    async function warmTemplateVideos() {
+      for (const t of templates) {
+        if (cancelled) return
+        try {
+          await fetch(t.videoUrl)
+        } catch {
+          // Sin conexión momentánea, no importa — se vuelve a pedir al reproducir.
+        }
+      }
+    }
+    warmTemplateVideos()
+    return () => {
+      cancelled = true
+    }
+  }, [session, templates])
 
   // Fin natural de la canción. El motor de audio y el <video> llegan acá por
   // caminos distintos, pero el efecto es el mismo: si hay gente esperando en
@@ -1233,31 +1502,45 @@ export function App() {
               className={`nav-btn${page === item.id ? ' active' : ''}`}
               onClick={() => setPage(item.id)}
             >
-              {item.icon}
+              <Icon name={item.icon} size={17} />
               {item.label}
             </button>
           ))}
         </nav>
 
-        <div className="session-box">
-          {session ? (
-            <>
-              <div className="session-status">
-                <span className="session-dot active" />
-                Sesión activa · {sessionSingers.length} cantante{sessionSingers.length === 1 ? '' : 's'}
-              </div>
-              <button className="btn-secondary" onClick={handleEndSession}>
-                Terminar sesión
-              </button>
-            </>
-          ) : (
+        {/* Único punto de entrada a la sesión, y visible en todas las
+            pantallas porque el sidebar es persistente: arranca una, o
+            devuelve a la que está en curso desde donde sea que esté el
+            operador. */}
+        <div className={`session-box${session ? ` is-${session.status}` : ''}`}>
+          {!session ? (
             <>
               <div className="session-status">
                 <span className="session-dot" />
                 Sesión: no iniciada
               </div>
-              <button className="btn-primary" onClick={handleStartSession}>
-                Iniciar sesión
+              <button className="btn-primary btn-block" onClick={handleStartSession}>
+                <Icon name="mic" size={15} /> Iniciar sesión
+              </button>
+            </>
+          ) : (
+            <>
+              <button className="session-return" onClick={handleGoToSession}>
+                <div className="session-status">
+                  <span className={`session-dot${session.status === 'corriendo' ? ' active' : ' armando'}`} />
+                  {session.status === 'armando' ? 'Armando sesión' : 'En vivo'}
+                </div>
+                <div className="session-meta">
+                  {sessionSingers.length} cantante{sessionSingers.length === 1 ? '' : 's'} · {queue.length} en cola
+                </div>
+              </button>
+              {session.status === 'armando' && (
+                <button className="btn-primary btn-block" onClick={handleGoToSession}>
+                  Seguir armando
+                </button>
+              )}
+              <button className="btn-secondary btn-block" onClick={handleEndSession}>
+                Terminar sesión
               </button>
             </>
           )}
@@ -1268,54 +1551,28 @@ export function App() {
         <section className={`page${page === 'inicio' ? ' active' : ''}`}>
           <div className="stage-head">
             <div>
-              <h1>HCK · High Class Karaoke</h1>
-              <p>Donde el que canta, brilla. Una selección al azar para arrancar.</p>
+              <h1>High Class Karaoke</h1>
+              <p>Donde el que canta, brilla.</p>
             </div>
             <button className="btn-primary" onClick={() => setPage('biblioteca')}>
               Ver toda la biblioteca
             </button>
           </div>
 
-          <div className="library-table">
-            <div className="library-row library-row--head">
-              <div>Canción</div>
-              <div>Artista</div>
-              <div>Formato</div>
-              <div>Calidad</div>
-              <div />
-            </div>
-            {randomSongs.map((s) => {
-              const isPlaying = s.id === nowPlayingSong?.id
-              return (
-                <div key={s.id} className={`library-row${isPlaying ? ' is-playing' : ''}`}>
-                  <div className="song-cell">
-                    <div className="song-swatch" style={{ background: songColor(s.id) }} />
-                    {s.title}
-                  </div>
-                  <div className="dim-cell">{s.artist}</div>
-                  <div className="dim-cell">{FORMAT_LABEL[s.sourceFormat]}</div>
-                  <div>
-                    <span className="badge" style={{ ['--quality-color' as string]: QUALITY_COLOR[s.syncQuality] }}>
-                      {QUALITY_LABEL[s.syncQuality]}
-                    </span>
-                  </div>
-                  <div className="row-actions">
-                    <button className="row-play-btn" onClick={() => handlePlay(s.id)} disabled={isPlaying}>
-                      {isPlaying ? 'Reproduciendo' : '▶ Reproducir'}
-                    </button>
-                    <button
-                      className="row-queue-btn"
-                      onClick={() => openAddToQueue(s)}
-                      disabled={!session}
-                      title={session ? 'Agregar a la cola' : 'Iniciá una sesión primero'}
-                    >
-                      + Cola
-                    </button>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
+          <BannerCarousel banners={banners} />
+
+          {homeCategories.map((catId) => (
+            <CategoryCarousel
+              key={catId}
+              categoryId={catId}
+              nowPlayingId={nowPlayingSong?.id ?? null}
+              sessionActive={!!session}
+              onPlay={handlePlay}
+              onAddQueue={openAddToQueue}
+              onViewAll={() => setPage('biblioteca')}
+            />
+          ))}
+          <div className="hint">Las categorías se eligen en Configuración → Categorías de inicio.</div>
         </section>
 
         <section className={`page${page === 'biblioteca' ? ' active' : ''}`}>
@@ -1327,9 +1584,14 @@ export function App() {
                 una oportunidad para ser la estrella de la noche.
               </p>
             </div>
-            <button className="btn-primary" onClick={() => setPage('generar')}>
-              + Agregar canción
-            </button>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <button className="btn-secondary" onClick={() => setPage('playlists')}>
+                <Icon name="playlist" size={15} /> Playlists
+              </button>
+              <button className="btn-primary" onClick={() => setPage('generar')}>
+                + Agregar canción
+              </button>
+            </div>
           </div>
 
           <div className="library-toolbar">
@@ -1369,80 +1631,145 @@ export function App() {
             <button className="btn-toolbar" onClick={() => setSortAsc((v) => !v)}>
               Ordenar {sortAsc ? 'A→Z' : 'Z→A'}
             </button>
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.4rem' }}>
+              <button
+                className="btn-icon"
+                onClick={() => setLibraryView('list')}
+                aria-label="Vista lista"
+                style={libraryView === 'list' ? { borderColor: 'var(--accent)', color: 'var(--accent)' } : undefined}
+              >
+                <Icon name="list" size={16} />
+              </button>
+              <button
+                className="btn-icon"
+                onClick={() => setLibraryView('grid')}
+                aria-label="Vista grilla"
+                style={libraryView === 'grid' ? { borderColor: 'var(--accent)', color: 'var(--accent)' } : undefined}
+              >
+                <Icon name="grid" size={16} />
+              </button>
+            </div>
           </div>
 
-          <div className="library-table">
-            <div className="library-row library-row--head">
-              <div>Canción</div>
-              <div>Artista</div>
-              <div>Formato</div>
-              <div>Calidad</div>
-              <div />
-            </div>
-            {songs.map((s) => {
-              const isPlaying = s.id === nowPlayingSong?.id
-              return (
-                <div key={s.id} className={`library-row${isPlaying ? ' is-playing' : ''}`}>
-                  <div className="song-cell">
-                    <div className="song-swatch" style={{ background: songColor(s.id) }} />
-                    {s.title}
-                  </div>
-                  <div className="dim-cell">{s.artist}</div>
-                  <div className="dim-cell">{FORMAT_LABEL[s.sourceFormat]}</div>
-                  <div>
-                    <span className="badge" style={{ ['--quality-color' as string]: QUALITY_COLOR[s.syncQuality] }}>
-                      {QUALITY_LABEL[s.syncQuality]}
-                    </span>
-                  </div>
-                  <div className="row-actions">
-                    <button
-                      className={`row-verify-btn${s.syncVerified ? ' is-verified' : ''}`}
-                      onClick={() => toggleSyncVerified(s)}
-                      title={
-                        s.syncVerified
-                          ? 'Sincronía verificada — click para desmarcar'
-                          : 'Marcar como sincronía verificada'
-                      }
-                    >
-                      ✓
-                    </button>
-                    <button className="row-play-btn" onClick={() => handlePlay(s.id)} disabled={isPlaying}>
-                      {isPlaying ? 'Reproduciendo' : '▶ Reproducir'}
-                    </button>
-                    <button
-                      className="row-queue-btn"
-                      onClick={() => openAddToQueue(s)}
-                      disabled={!session}
-                      title={session ? 'Agregar a la cola' : 'Iniciá una sesión primero'}
-                    >
-                      + Cola
-                    </button>
-                    <button
-                      className="row-queue-btn"
-                      onClick={() => {
-                        setAddToPlaylistSong(s)
-                        setPlaylistMessage(null)
-                      }}
-                      title="Agregar a una playlist"
-                    >
-                      + Playlist
-                    </button>
-                    {s.audioUrl && (
-                      <button className="row-resync-btn" onClick={() => openResync(s)} title="Re-sincronizar letra">
-                        ⟳
+          {libraryView === 'grid' ? (
+            <div className="carousel-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))' }}>
+              {songs.map((s) => {
+                const isPlaying = s.id === nowPlayingSong?.id
+                return (
+                  <div key={s.id} className="card carousel-card">
+                    <div className="carousel-cover-wrap">
+                      <div className="carousel-cover" style={{ background: songColor(s.id) }} />
+                      <button className="btn-icon carousel-play" onClick={() => handlePlay(s.id)} disabled={isPlaying} aria-label="Reproducir">
+                        <Icon name="play" size={14} />
                       </button>
-                    )}
-                    <button className="row-delete-btn" onClick={() => setDeleteSong(s)} title="Eliminar canción">
-                      🗑
-                    </button>
+                    </div>
+                    <div className="card-title">{s.title}</div>
+                    <div className="card-meta">{s.artist}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '0.4rem' }}>
+                      <span className="badge" style={{ ['--quality-color' as string]: QUALITY_COLOR[s.syncQuality] }}>
+                        {QUALITY_LABEL[s.syncQuality]}
+                      </span>
+                      <button className="btn-icon" onClick={() => openAddToQueue(s)} disabled={!session} title="Agregar a la cola">
+                        <Icon name="plus" size={14} />
+                      </button>
+                    </div>
                   </div>
-                </div>
-              )
-            })}
-            {songs.length === 0 && !songsLoading && (
-              <div className="no-results">Ninguna canción coincide. Probá otra búsqueda o filtro.</div>
-            )}
-          </div>
+                )
+              })}
+              {songs.length === 0 && !songsLoading && (
+                <div className="no-results">Ninguna canción coincide. Probá otra búsqueda o filtro.</div>
+              )}
+            </div>
+          ) : (
+            <div className="library-table">
+              <div className="library-row library-row--head">
+                <div>Canción</div>
+                <div>Artista</div>
+                <div>Género</div>
+                <div>Formato</div>
+                <div>Calidad</div>
+                <div />
+              </div>
+              {songs.map((s) => {
+                const isPlaying = s.id === nowPlayingSong?.id
+                return (
+                  <div key={s.id} className={`library-row${isPlaying ? ' is-playing' : ''}`}>
+                    <div className="song-cell">
+                      <div className="song-swatch" style={{ background: songColor(s.id) }} />
+                      {s.title}
+                    </div>
+                    <div className="dim-cell">{s.artist}</div>
+                    <div>
+                      <select
+                        className="genre-select"
+                        value={s.genre ?? ''}
+                        onChange={(e) => handleSetGenre(s.id, (e.target.value || null) as Genre | null)}
+                        title="Género (para las categorías de Inicio)"
+                      >
+                        <option value="">Sin género</option>
+                        {GENRES.map((g) => (
+                          <option key={g} value={g}>
+                            {CATEGORIES.find((c) => c.id === g)?.name ?? g}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="dim-cell">{FORMAT_LABEL[s.sourceFormat]}</div>
+                    <div>
+                      <span className="badge" style={{ ['--quality-color' as string]: QUALITY_COLOR[s.syncQuality] }}>
+                        {QUALITY_LABEL[s.syncQuality]}
+                      </span>
+                    </div>
+                    <div className="row-actions">
+                      <button
+                        className={`row-verify-btn${s.syncVerified ? ' is-verified' : ''}`}
+                        onClick={() => toggleSyncVerified(s)}
+                        title={
+                          s.syncVerified
+                            ? 'Sincronía verificada — click para desmarcar'
+                            : 'Marcar como sincronía verificada'
+                        }
+                      >
+                        ✓
+                      </button>
+                      <button className="row-play-btn" onClick={() => handlePlay(s.id)} disabled={isPlaying}>
+                        {isPlaying ? 'Reproduciendo' : '▶ Reproducir'}
+                      </button>
+                      <button
+                        className="row-queue-btn"
+                        onClick={() => openAddToQueue(s)}
+                        disabled={!session}
+                        title={session ? 'Agregar a la cola' : 'Iniciá una sesión primero'}
+                      >
+                        + Cola
+                      </button>
+                      <button
+                        className="row-queue-btn"
+                        onClick={() => {
+                          setAddToPlaylistSong(s)
+                          setPlaylistMessage(null)
+                        }}
+                        title="Agregar a una playlist"
+                      >
+                        + Playlist
+                      </button>
+                      {s.audioUrl && (
+                        <button className="row-resync-btn" onClick={() => openResync(s)} title="Re-sincronizar letra">
+                          ⟳
+                        </button>
+                      )}
+                      <button className="row-delete-btn" onClick={() => setDeleteSong(s)} title="Eliminar canción">
+                        🗑
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
+              {songs.length === 0 && !songsLoading && (
+                <div className="no-results">Ninguna canción coincide. Probá otra búsqueda o filtro.</div>
+              )}
+            </div>
+          )}
           {songs.length < songsTotal && (
             <button className="btn-secondary" style={{ marginTop: '0.75rem' }} disabled={songsLoading} onClick={loadMoreSongs}>
               {songsLoading ? 'Cargando…' : `Cargar más (${songsTotal - songs.length} restantes)`}
@@ -1500,6 +1827,7 @@ export function App() {
                         setPushSingerId(null)
                         setPushSingerName('')
                         setPushSingerPhoto(null)
+                        setPushSingerOval(null)
                       }}
                     >
                       Agregar a la sesión
@@ -1546,9 +1874,73 @@ export function App() {
         <section className={`page${page === 'cola' ? ' active' : ''}`}>
           <div className="stage-head">
             <div>
-              <h1>Cola en vivo</h1>
+              <h1>Sesión de Karaoke</h1>
               <p>Quién canta qué, en qué orden, y quién va ganando.</p>
             </div>
+            {session && (
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                <button
+                  className={autoAdvance ? 'btn-primary' : 'btn-secondary'}
+                  onClick={() => setAutoAdvance((v) => !v)}
+                  title="Al terminar cada canción, pasar solo a la siguiente de la cola"
+                >
+                  Auto-avance {autoAdvance ? 'ON' : 'OFF'}
+                </button>
+                <button className="btn-secondary" onClick={() => setPage('playlists')}>
+                  <Icon name="playlist" size={15} /> Agregar playlist
+                </button>
+              </div>
+            )}
+          </div>
+
+          {!session ? (
+            <div className="session-cta">
+              <Icon name="mic" size={28} />
+              <h2>No hay ninguna sesión activa</h2>
+              <p className="hint">
+                Una sesión agrupa a los cantantes de la noche, sus fotos, la cola de canciones y los puntajes.
+                Arrancá una y te guío para cargar al primero.
+              </p>
+              <button className="btn-primary" onClick={handleStartSession}>
+                <Icon name="mic" size={15} /> Iniciar sesión de karaoke
+              </button>
+            </div>
+          ) : (
+            <>
+          {session.status === 'armando' && !showWizard && (
+            <div className="session-armando-banner">
+              <div>
+                <strong>Estás armando la sesión</strong>
+                <div className="hint">El show todavía no arrancó — sumá cantantes y sus canciones.</div>
+              </div>
+              <button className="btn-primary" onClick={() => setShowWizard(true)}>
+                Seguir armando
+              </button>
+            </div>
+          )}
+
+          <div className="singer-chip-row">
+            <span className="singer-chip-label">Cantantes</span>
+            {sessionSingers.map((s) => (
+              <div className="singer-chip" key={s.id}>
+                {s.photoUrl ? (
+                  <img className="singer-thumb" src={s.photoUrl} alt="" />
+                ) : (
+                  <span className="singer-chip-avatar">{s.name[0]?.toUpperCase()}</span>
+                )}
+                <span>{s.name}</span>
+                {s.photoUrl && <Icon name="camera" size={12} />}
+              </div>
+            ))}
+            {sessionSingers.length === 0 && <span className="hint">Todavía no hay ninguno.</span>}
+            <button
+              className="btn-ghost"
+              disabled={!session}
+              title={session ? undefined : 'Iniciá una sesión primero'}
+              onClick={() => setShowWizard(true)}
+            >
+              <Icon name="plus" size={14} /> Registrar cantante
+            </button>
           </div>
 
           <div className="queue-now-card">
@@ -1562,6 +1954,19 @@ export function App() {
                   </div>
                   <div className="queue-now-song">
                     {queue[0].song.title} · {queue[0].song.artist}
+                  </div>
+                  {/* Puntaje en el momento — editable hasta "Siguiente", no
+                      hace falta esperar a que termine para calificar. */}
+                  <div className="score-buttons queue-now-score">
+                    {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
+                      <button
+                        key={n}
+                        className={`score-btn${queue[0].score === n ? ' is-active' : ''}`}
+                        onClick={() => handleScoreItem(queue[0].id, n)}
+                      >
+                        {n}
+                      </button>
+                    ))}
                   </div>
                 </>
               ) : (
@@ -1577,9 +1982,58 @@ export function App() {
             </button>
           </div>
 
+          {session && (
+            <div className="queue-panel facepanel">
+              <h2>
+                <Icon name="wand" size={16} /> Cara en el escenario
+              </h2>
+              {templates.length === 0 ? (
+                <p className="hint">
+                  Todavía no hay templates — subí uno desde Studio → Fun Box.
+                </p>
+              ) : (
+                <>
+                  <p className="hint">
+                    Con pantalla completa activa, apretá el número para mostrarlo sobre quien está cantando.
+                  </p>
+                  {queue[0]?.status === 'playing' && !queue[0].singerPhotoUrl && (
+                    <p className="hint facepanel-nophoto">
+                      {queue[0].singer} no tiene foto cargada — el hotkey no va a mostrar nada hasta que le carguen una.
+                    </p>
+                  )}
+                  <div className="facepanel-grid">
+                    {templates.slice(0, 9).map((t, i) => (
+                      <button
+                        key={t.id}
+                        type="button"
+                        className="facepanel-card"
+                        disabled={!kioskMode}
+                        title={kioskMode ? undefined : 'Solo funciona con pantalla completa activa'}
+                        onClick={() => triggerFaceSwap(t)}
+                      >
+                        <span className="tag tag-accent facepanel-key">{i + 1}</span>
+                        <video src={t.videoUrl} muted loop autoPlay playsInline />
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
           <div className="queue-columns">
             <div className="queue-panel">
-              <h2>Próximos en la cola</h2>
+              <div className="queue-panel-head">
+                <h2>Próximos en la cola</h2>
+                <button
+                  className="btn-ghost"
+                  disabled={queue.filter((q) => q.status === 'queued').length < 2}
+                  title="Reparte lo que falta cantar alternando entre cantantes"
+                  onClick={handleInterleaveQueue}
+                >
+                  <Icon name="sync" size={13} /> Alternar turnos
+                </button>
+              </div>
               {queue.filter((q) => q.status === 'queued').length === 0 ? (
                 <p className="hint">No hay nadie en espera — agregá cantantes desde la Biblioteca ("+ Cola").</p>
               ) : (
@@ -1656,28 +2110,8 @@ export function App() {
             </div>
           </div>
 
-          <div className="leaderboard-panel">
-            <h2>Tabla de posiciones</h2>
-            {leaderboard.length === 0 ? (
-              <p className="hint">Todavía no hay puntajes cargados.</p>
-            ) : (
-              <div className="leaderboard-list">
-                {leaderboard.map((entry, i) => (
-                  <div className={`leaderboard-row${i === 0 ? ' is-leader' : ''}`} key={entry.singerId}>
-                    <div className="leaderboard-rank">{i + 1}</div>
-                    <div className="leaderboard-singer">
-                      {entry.singerPhotoUrl && <img className="singer-thumb" src={entry.singerPhotoUrl} alt="" />}
-                      {entry.singer}
-                    </div>
-                    <div className="leaderboard-songs">
-                      {entry.songsScored} canción{entry.songsScored === 1 ? '' : 'es'}
-                    </div>
-                    <div className="leaderboard-score">{entry.totalScore} pts</div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+            </>
+          )}
         </section>
 
         <section className={`page${page === 'studio' ? ' active' : ''}`}>
@@ -1688,25 +2122,30 @@ export function App() {
             </div>
           </div>
           <div className="playlist-grid">
-            <div className="playlist-card hub-card" onClick={() => setPage('generar')}>
-              <div className="playlist-name">Crear canción en la biblioteca</div>
-              <p className="hint">Subís audio + letra pegada y se sincroniza sola con WhisperX.</p>
+            <div className="card hub-card" onClick={() => setPage('generar')}>
+              <Icon name="wand" size={22} />
+              <div className="card-title">Crear canción en la biblioteca</div>
+              <div className="card-body">Subís audio + letra pegada y se sincroniza sola con WhisperX.</div>
             </div>
-            <div className="playlist-card hub-card" onClick={() => setPage('subir')}>
-              <div className="playlist-name">Subir canción a la biblioteca</div>
-              <p className="hint">Para karaoke ya armado — LRC, JSON propio, CD+G o video con letra quemada.</p>
+            <div className="card hub-card" onClick={() => setPage('subir')}>
+              <Icon name="upload" size={22} />
+              <div className="card-title">Subir canción a la biblioteca</div>
+              <div className="card-body">Para karaoke ya armado — LRC, JSON propio, CD+G o video con letra quemada.</div>
             </div>
-            <div className="playlist-card hub-card" onClick={() => setPage('fondo')}>
-              <div className="playlist-name">Galería de fondos</div>
-              <p className="hint">El video de fondo detrás de la letra en pantalla completa.</p>
+            <div className="card hub-card" onClick={() => setPage('fondo')}>
+              <Icon name="film" size={22} />
+              <div className="card-title">Fondo de video</div>
+              <div className="card-body">El video de fondo detrás de la letra en pantalla completa.</div>
             </div>
-            <div className="playlist-card hub-card" onClick={() => window.location.assign('/template-editor')}>
-              <div className="playlist-name">Editor de templates</div>
-              <p className="hint">Marcá a mano el "slot" de cara sobre un video para el pack de animaciones.</p>
+            <div className="card hub-card" onClick={() => setPage('funbox')}>
+              <Icon name="star" size={22} />
+              <div className="card-title">Fun Box</div>
+              <div className="card-body">Pack de templates para la animación de cara en el escenario — subí un video y se mapea solo.</div>
             </div>
-            <div className="playlist-card hub-card" onClick={() => window.location.assign('/walk-on')}>
-              <div className="playlist-name">Entrada en vivo</div>
-              <p className="hint">Animación de caminata para presentar al próximo cantante.</p>
+            <div className="card hub-card" onClick={() => window.location.assign('/template-editor')}>
+              <Icon name="grid" size={22} />
+              <div className="card-title">Editor de templates</div>
+              <div className="card-body">Marcá a mano el "slot" de cara sobre un video, para templates sin mapeo automático.</div>
             </div>
           </div>
         </section>
@@ -1907,7 +2346,7 @@ export function App() {
         <section className={`page${page === 'fondo' ? ' active' : ''}`}>
           <div className="stage-head">
             <div>
-              <h1>Galería de fondos</h1>
+              <h1>Fondo de video</h1>
               <p>El clip detrás de la letra en la pantalla grande. La letra siempre queda encima, elijas el que elijas.</p>
             </div>
           </div>
@@ -1923,6 +2362,126 @@ export function App() {
             </form>
             {backgroundMessage && <p className="ok">{backgroundMessage}</p>}
           </div>
+
+          <div className="panel live-camera-panel">
+            <div className="card-title">Fuente en vivo (OBS)</div>
+            <p className="hint">
+              Muestra lo que esté saliendo de una cámara en vivo detrás de la letra — pensado para la cámara virtual
+              de OBS ("Iniciar cámara virtual"), pero funciona con cualquier webcam. Mientras esté activa, tapa al
+              video de fondo subido arriba.
+            </p>
+            <div className="field">
+              <label>Dispositivo</label>
+              <select value={selectedCameraId} onChange={(e) => setSelectedCameraId(e.target.value)}>
+                <option value="">Cámara por default</option>
+                {cameraDevices.map((d, i) => (
+                  <option key={d.deviceId} value={d.deviceId}>
+                    {d.label || `Cámara ${i + 1}`}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="live-camera-actions">
+              <button type="button" className="btn-secondary" onClick={refreshCameraDevices}>
+                <Icon name="refresh" size={14} /> Actualizar lista
+              </button>
+              {liveCameraStream ? (
+                <button type="button" className="btn-danger" onClick={stopLiveCamera}>
+                  Apagar cámara en vivo
+                </button>
+              ) : (
+                <button type="button" className="btn-primary" onClick={startLiveCamera}>
+                  Usar cámara en vivo
+                </button>
+              )}
+            </div>
+            {liveCameraStream && (
+              <p className="ok">
+                <Icon name="camera" size={13} /> Cámara en vivo activa — así se ve ahora en pantalla completa.
+              </p>
+            )}
+            {liveCameraError && <p className="error">{liveCameraError}</p>}
+          </div>
+        </section>
+
+        <section className={`page${page === 'funbox' ? ' active' : ''}`}>
+          <div className="stage-head">
+            <div>
+              <h1>Fun Box</h1>
+              <p>Pack de templates para la animación de cara en el escenario — subí un video y se mapea solo.</p>
+            </div>
+          </div>
+          <div className="panel" style={{ maxWidth: '640px' }}>
+            <div className="field">
+              <label>Subir video nuevo</label>
+              <input
+                type="file"
+                accept=".mp4,.webm,.mov"
+                disabled={funboxUploading}
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (file) handleUploadTemplate(file)
+                  e.target.value = ''
+                }}
+              />
+              <p className="hint">
+                Corre el tracking por color automáticamente (unos segundos) — el video tiene que tener la máscara/capucha
+                de color saturado que pide el director de escenas.
+              </p>
+            </div>
+            {funboxUploading && <p className="hint">Mapeando…</p>}
+            {funboxError && <p className="error">{funboxError}</p>}
+          </div>
+
+          {/* Probar el mapeo con una cara real, sin depender de estar en
+              pantalla completa en medio de un show — para distinguir "no
+              mapea bien" de "no se ve nada" de "se queda en el primer
+              frame". */}
+          {singersWithPhoto.length === 0 ? (
+            <p className="hint funbox-test-hint">
+              Para probar cómo queda mapeada la cara necesitás al menos un cantante con foto — registrá uno desde
+              Sesión de Karaoke.
+            </p>
+          ) : (
+            <div className="field funbox-test-picker">
+              <label>Probar con</label>
+              <select
+                value={testSingerId ?? singersWithPhoto[0].id}
+                onChange={(e) => setTestSingerId(e.target.value)}
+              >
+                {singersWithPhoto.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          <div className="playlist-grid">
+            {templates.map((t) => (
+              <div className="card" key={t.id}>
+                <video src={t.videoUrl} muted controls style={{ width: '100%', borderRadius: 'var(--radius-sm)' }} />
+                <div className="card-meta" style={{ marginTop: '0.5rem' }}>
+                  {t.id}
+                </div>
+                <div className="funbox-card-actions">
+                  <button
+                    className="btn-secondary"
+                    disabled={singersWithPhoto.length === 0}
+                    title={singersWithPhoto.length === 0 ? 'Necesitás un cantante con foto para probar' : undefined}
+                    onClick={() => testFunboxTemplate(t)}
+                  >
+                    <Icon name="wand" size={14} /> Probar
+                  </button>
+                  <button className="btn-danger" onClick={() => handleDeleteTemplate(t.id)}>
+                    <Icon name="trash" size={14} /> Eliminar
+                  </button>
+                </div>
+              </div>
+            ))}
+            {templates.length === 0 && <p className="hint">Todavía no hay ningún template — subí el primero arriba.</p>}
+          </div>
         </section>
 
         <section className={`page${page === 'configuracion' ? ' active' : ''}`}>
@@ -1934,9 +2493,184 @@ export function App() {
           </div>
           <h2 className="config-section-title">Configuración general</h2>
           <div className="playlist-grid">
-            <div className="playlist-card hub-card" onClick={() => setPage('importar')}>
-              <div className="playlist-name">Importar carpetas</div>
-              <p className="hint">Carpetas del disco con karaokes ya armados, sin copiar los archivos pesados.</p>
+            <div className="card hub-card" onClick={() => setPage('importar')}>
+              <Icon name="folder" size={22} />
+              <div className="card-title">Importar carpetas</div>
+              <div className="card-body">Carpetas del disco con karaokes ya armados, sin copiar los archivos pesados.</div>
+            </div>
+            <div className="card hub-card" onClick={() => setPage('categorias')}>
+              <Icon name="home" size={22} />
+              <div className="card-title">Categorías de inicio</div>
+              <div className="card-body">Qué categorías se muestran en Inicio, y en qué orden — hasta 3.</div>
+            </div>
+            <div className="card hub-card" onClick={() => setPage('banners')}>
+              <Icon name="grid" size={22} />
+              <div className="card-title">Banners de inicio</div>
+              <div className="card-body">El carrusel panorámico arriba de las categorías en Inicio.</div>
+            </div>
+          </div>
+        </section>
+
+        <section className={`page${page === 'banners' ? ' active' : ''}`}>
+          <div className="stage-head">
+            <div>
+              <h1>Banners de inicio</h1>
+              <p>El carrusel panorámico arriba de las categorías en Inicio.</p>
+            </div>
+          </div>
+          <button className="btn-ghost" style={{ width: 'fit-content' }} onClick={() => setPage('configuracion')}>
+            <Icon name="chevL" size={15} /> Configuración
+          </button>
+
+          <div className="panel" style={{ maxWidth: '640px' }}>
+            <div className="field">
+              <label>Subir banner nuevo</label>
+              <input
+                type="file"
+                accept="image/*"
+                disabled={bannerUploading}
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (file) handleUploadBanner(file)
+                  e.target.value = ''
+                }}
+              />
+              <p className="hint">
+                Subilo en <strong>2100×900px</strong> (relación de aspecto 21:9, panorámico) — es como se recorta en
+                pantalla, y si el texto ya viene quemado en la imagen (ver PROMPTS-BANNERS.md) conviene generarlo
+                directamente en esa proporción para que no quede nada importante cerca de los bordes.
+              </p>
+            </div>
+            {bannerUploading && <p className="hint">Subiendo…</p>}
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', maxWidth: '640px' }}>
+            {banners.map((b, i) => (
+              <div className="card banner-manage-card" key={b.id}>
+                <img className="banner-manage-thumb" src={b.imageUrl} alt="" />
+                <div style={{ flex: 1 }} />
+                <button className="btn-icon" disabled={i === 0} onClick={() => reorderBanner(b.id, 'up')} aria-label="Subir">
+                  <Icon name="up" size={15} />
+                </button>
+                <button
+                  className="btn-icon"
+                  disabled={i === banners.length - 1}
+                  onClick={() => reorderBanner(b.id, 'down')}
+                  aria-label="Bajar"
+                >
+                  <Icon name="down" size={15} />
+                </button>
+                <button className="btn-icon" onClick={() => handleDeleteBanner(b.id)} aria-label="Eliminar">
+                  <Icon name="trash" size={15} />
+                </button>
+              </div>
+            ))}
+            {banners.length === 0 && <p className="hint">Todavía no hay ningún banner — subí el primero arriba.</p>}
+          </div>
+        </section>
+
+        <section className={`page${page === 'categorias' ? ' active' : ''}`}>
+          <div className="stage-head">
+            <div>
+              <h1>Categorías de inicio</h1>
+              <p>Elegí hasta tres. Cada una muestra hasta 15 canciones en Inicio.</p>
+            </div>
+          </div>
+          <button className="btn-ghost" style={{ width: 'fit-content' }} onClick={() => setPage('configuracion')}>
+            <Icon name="chevL" size={15} /> Configuración
+          </button>
+          <div style={{ maxWidth: '620px', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            <div className="hint">En Inicio, en este orden</div>
+            {homeCategories.map((catId, i) => {
+              const cat = CATEGORIES.find((c) => c.id === catId)
+              return (
+                <div className="card" key={catId} style={{ flexDirection: 'row', alignItems: 'center', gap: '0.75rem', padding: '0.6rem 0.9rem' }}>
+                  <span className="card-meta" style={{ width: '20px' }}>
+                    {i + 1}
+                  </span>
+                  <div style={{ flex: 1 }}>
+                    <div className="card-title" style={{ fontSize: '0.9rem' }}>
+                      {cat?.name ?? catId}
+                    </div>
+                    <div className="card-meta">{cat?.desc}</div>
+                  </div>
+                  <button
+                    className="btn-icon"
+                    disabled={i === 0}
+                    onClick={() => {
+                      const next = [...homeCategories]
+                      ;[next[i - 1], next[i]] = [next[i], next[i - 1]]
+                      setHomeCategories(next)
+                      fetch('/api/settings/home-categories', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ ids: next }),
+                      })
+                    }}
+                    aria-label="Subir"
+                  >
+                    <Icon name="up" size={15} />
+                  </button>
+                  <button
+                    className="btn-icon"
+                    disabled={i === homeCategories.length - 1}
+                    onClick={() => {
+                      const next = [...homeCategories]
+                      ;[next[i], next[i + 1]] = [next[i + 1], next[i]]
+                      setHomeCategories(next)
+                      fetch('/api/settings/home-categories', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ ids: next }),
+                      })
+                    }}
+                    aria-label="Bajar"
+                  >
+                    <Icon name="down" size={15} />
+                  </button>
+                  <button
+                    className="btn-icon"
+                    onClick={() => {
+                      const next = homeCategories.filter((id) => id !== catId)
+                      setHomeCategories(next)
+                      fetch('/api/settings/home-categories', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ ids: next }),
+                      })
+                    }}
+                    aria-label="Quitar"
+                  >
+                    <Icon name="x" size={15} />
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+          <div style={{ maxWidth: '620px' }}>
+            <div className="hint" style={{ marginBottom: '0.5rem' }}>
+              Disponibles
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+              {CATEGORIES.filter((c) => !homeCategories.includes(c.id)).map((c) => (
+                <button
+                  key={c.id}
+                  className="btn-secondary"
+                  disabled={homeCategories.length >= 3}
+                  title={c.desc}
+                  onClick={() => {
+                    const next = [...homeCategories, c.id]
+                    setHomeCategories(next)
+                    fetch('/api/settings/home-categories', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ ids: next }),
+                    })
+                  }}
+                >
+                  <Icon name="plus" size={14} /> {c.name}
+                </button>
+              ))}
             </div>
           </div>
         </section>
@@ -2049,17 +2783,33 @@ export function App() {
         </section>
       </main>
 
+      {/* Prueba de Fun Box: fuera del gate de kioskMode a propósito — se
+          dispara desde Studio, no desde una sesión en vivo. */}
+      {testFaceSwap && (
+        <FaceSwapOverlay
+          template={testFaceSwap.template}
+          photoUrl={testFaceSwap.photoUrl}
+          oval={testFaceSwap.oval}
+          onDone={() => setTestFaceSwap(null)}
+        />
+      )}
+
       {kioskMode && (
         <div className="performance">
           {activeFaceSwap && (
             <FaceSwapOverlay
               template={activeFaceSwap.template}
               photoUrl={activeFaceSwap.photoUrl}
+              oval={activeFaceSwap.oval}
               onDone={() => setActiveFaceSwap(null)}
             />
           )}
-          {backgroundVideoUrl && (
-            <video className="background-video" src={backgroundVideoUrl} loop muted autoPlay playsInline />
+          {liveCameraStream ? (
+            <LiveBackgroundVideo stream={liveCameraStream} />
+          ) : (
+            backgroundVideoUrl && (
+              <video className="background-video" src={backgroundVideoUrl} loop muted autoPlay playsInline />
+            )
           )}
           {dimBackground && <div className="performance-scrim" />}
           <div className="performance-content">
@@ -2239,7 +2989,7 @@ export function App() {
                 ))}
               </div>
             )}
-            <div className="modal-actions">
+            <div className="step-actions">
               <button className="btn-secondary" onClick={() => setAddToPlaylistSong(null)}>
                 Cancelar
               </button>
@@ -2258,15 +3008,17 @@ export function App() {
             <SingerPicker
               sessionSingers={sessionSingers}
               allowBlank
-              value={{ singerId: pushSingerId, name: pushSingerName, photo: pushSingerPhoto }}
+              value={{ singerId: pushSingerId, name: pushSingerName, photo: pushSingerPhoto, oval: pushSingerOval }}
               onChange={(v) => {
                 setPushSingerId(v.singerId)
                 setPushSingerName(v.name)
                 setPushSingerPhoto(v.photo)
+                setPushSingerOval(v.oval)
               }}
               onEnter={submitPushPlaylist}
+              previewTemplate={templates[0]}
             />
-            <div className="modal-actions">
+            <div className="step-actions">
               <button className="btn-secondary" onClick={() => setPushPlaylist(null)}>
                 Cancelar
               </button>
@@ -2285,13 +3037,15 @@ export function App() {
             <SingerPicker
               sessionSingers={sessionSingers}
               autoFocus
-              value={{ singerId: queueSingerId, name: queueSingerName, photo: queueSingerPhoto }}
+              value={{ singerId: queueSingerId, name: queueSingerName, photo: queueSingerPhoto, oval: queueSingerOval }}
               onChange={(v) => {
                 setQueueSingerId(v.singerId)
                 setQueueSingerName(v.name)
                 setQueueSingerPhoto(v.photo)
+                setQueueSingerOval(v.oval)
               }}
               onEnter={submitAddToQueue}
+              previewTemplate={templates[0]}
             />
             <div className="step-actions">
               <button className="btn-secondary" onClick={() => setQueueSong(null)}>
@@ -2303,6 +3057,32 @@ export function App() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Un solo camino para sumar cantantes: el armado guiado. Antes había un
+          modal suelto de "Registrar cantante" que dejaba al cantante sin
+          canciones y sin decir qué seguía. */}
+      {session && showWizard && (
+        <SessionSetupWizard
+          sessionSingers={sessionSingers}
+          songCounts={songCounts}
+          queuedTotal={queue.length}
+          templates={templates}
+          onSingerCreated={refreshSession}
+          onSongsQueued={refreshQueue}
+          onBegin={handleBeginSession}
+          onClose={() => setShowWizard(false)}
+        />
+      )}
+
+      {showResults && (
+        <SessionResults
+          sessionSingers={sessionSingers}
+          leaderboard={leaderboard}
+          songCounts={songCounts}
+          onBack={() => setShowResults(false)}
+          onEndSession={handleCloseSession}
+        />
       )}
 
       {deleteSong && (

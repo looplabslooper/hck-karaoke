@@ -61,6 +61,9 @@ function argValue(name, fallback) {
 const limit = argValue('limit', Infinity)
 const startId = argValue('start-id', 0)
 const endId = argValue('end-id', Infinity)
+/** Reescribe solo los .json de letra, sin volver a volcar el audio (16 GB) —
+ * para cuando se corrige el parser de letra y no hace falta re-extraer todo. */
+const onlyLyrics = args.includes('--only-lyrics')
 
 const SENTINEL = Buffer.from('$$$@\r\n', 'ascii')
 
@@ -106,59 +109,122 @@ function extractRecord(raw, id) {
   return parsePlainContainer(plain)
 }
 
-/** Formato propio: fragmentos de sílaba separados por '/' o '\' (línea nueva) o pegados
- * (misma palabra). Un espacio al final del fragmento (antes del '%') cierra la palabra
- * actual. Timestamp en milisegundos (confirmado comparando contra la duración real del
- * video: interpretarlo como centisegundos daba tiempos de hasta 35 minutos en canciones
- * de 4). Sin tiempo de fin explícito por palabra — se infiere como el inicio de la
- * siguiente (mismo criterio que se usa en el resto del proyecto). */
+/** Tope de duración de una palabra, igual que en `pipeline/align.py`: sin esto, la última
+ * palabra de una línea se estira hasta que arranca la siguiente, y en un interludio
+ * instrumental eso da barridos de 100 segundos sobre una sola sílaba. */
+const MAX_WORD_SECONDS = 2.5
+
+/**
+ * Formato propio del catálogo legado. Cada token es
+ * `[marca de línea opcional][fragmento]%[ms]@`, un fragmento por *sílaba*
+ * (a veces varias palabras cortas comparten un mismo fragmento/timestamp):
+ *
+ *     \DA%34200@   LE%34250@    A%34290@    TU%34340@   CUER%34380@  PO%34430@
+ *      └ nueva línea            └ espacio = borde de palabra
+ *
+ * Reglas confirmadas contra los archivos reales (dos variantes conviven en el
+ * catálogo — un mismo fragmento nunca mezcla las dos, pero canciones distintas sí):
+ * - `/` o `\` al principio: arranca una línea nueva.
+ * - **Convención "espacio al principio"**: un espacio ANTES del fragmento marca que
+ *   ESE fragmento abre palabra nueva (ej. registros encriptados, id ≤ 6000).
+ * - **Convención "espacio al final"**: un espacio DESPUÉS del fragmento marca que el
+ *   SIGUIENTE fragmento abre palabra nueva — NO el actual (ej. registros en texto
+ *   plano, 6001 ≤ id ≤ 9000). Tratar este espacio como "abre palabra nueva en el
+ *   fragmento actual" (como hacía una versión anterior de este parser) desplaza el
+ *   corte de palabra en un fragmento: "EN UN CAFE SE VIERON" salía "EN UNCA FE
+ *   SEVIERON". Confirmado corriendo ambas variantes contra las 7005 canciones reales:
+ *   la interpretación vieja cambiaba el resultado en 6116/7005 (87%).
+ * - Sin espacio en ningún lado: sílaba pegada a la anterior ("DA"+"LE" = "DALE").
+ * - Un mismo fragmento puede traer más de una palabra corta pegada con espacio
+ *   *adentro* del propio texto (ej. "MI HER" = "MI" + inicio de "HERMANO", con un
+ *   solo timestamp para ambas) — hay que partirlo, si no queda "MI HER" como una
+ *   sola palabra con un espacio raro en el medio.
+ * - el timestamp es en milisegundos, y marca cuándo *empieza* a cantarse ese fragmento.
+ *
+ * Las sílabas se agrupan en palabras enteras porque `LyricsView` renderiza un espacio
+ * después de cada entrada: dejarlas sueltas mostraba "DA LE A TU CUER PO". El fin de
+ * cada palabra se infiere como el comienzo de la siguiente (mismo criterio que el resto
+ * del proyecto), acotado por MAX_WORD_SECONDS.
+ */
 function parseLegacyLyrics(text) {
   const tokens = text.split(/\r?\n/).filter((t) => t.trim().length > 0)
-  const lines = []
-  let currentLine = null
-  let currentWord = null
 
-  function closeWord(endTime) {
-    if (currentWord) {
-      currentWord.end = endTime
-      currentLine.words.push(currentWord)
-      currentWord = null
-    }
-  }
-  function closeLine(endTime) {
-    closeWord(endTime)
-    if (currentLine && currentLine.words.length > 0) {
-      currentLine.end = endTime
-      lines.push(currentLine)
-    }
-    currentLine = null
-  }
-
+  // 1) tokens -> fragmentos planos, sabiendo dónde empieza línea y dónde palabra
+  const frags = []
   for (const token of tokens) {
     const m = token.match(/^([\\/]?)(.*)%(\d+)@$/)
     if (!m) continue
-    const isNewLine = m[1] === '/' || m[1] === '\\'
-    const rawFragment = m[2]
-    const hasTrailingSpace = /\s$/.test(rawFragment)
-    const fragment = rawFragment.trim()
-    const t = Number(m[3]) / 1000
-
-    if (isNewLine) {
-      closeLine(t)
-      currentLine = { start: t, end: t, words: [] }
-    } else if (!currentLine) {
-      currentLine = { start: t, end: t, words: [] }
-    }
-
-    if (!currentWord) {
-      currentWord = { t: fragment, start: t, end: t }
-    } else {
-      closeWord(t)
-      currentWord = { t: fragment, start: t, end: t }
-    }
-    if (hasTrailingSpace) closeWord(t)
+    const raw = m[2]
+    const textPart = raw.trim()
+    if (!textPart) continue
+    frags.push({
+      newLine: m[1] === '/' || m[1] === '\\',
+      leadingSpace: /^\s/.test(raw),
+      trailingSpace: /\s$/.test(raw),
+      t: textPart,
+      start: Number(m[3]) / 1000,
+    })
   }
-  closeLine(currentWord ? currentWord.start : currentLine?.start ?? 0)
+  if (frags.length === 0) return { lines: [] }
+
+  // 2) agrupar sílabas en palabras y palabras en líneas
+  const lines = []
+  let line = null
+  let word = null
+
+  const pushWord = () => {
+    if (word && line) line.words.push(word)
+    word = null
+  }
+  const pushLine = () => {
+    pushWord()
+    if (line && line.words.length > 0) lines.push(line)
+    line = null
+  }
+
+  frags.forEach((f, i) => {
+    if (f.newLine) pushLine()
+    if (!line) line = { start: f.start, end: f.start, words: [] }
+
+    const prev = i > 0 ? frags[i - 1] : null
+    // El primer fragmento de una línea siempre abre palabra, aunque no traiga
+    // espacio. Las dos convenciones de espacio (ver comentario arriba) valen
+    // por igual: espacio al principio de ESTE fragmento, o al final del ANTERIOR.
+    const boundaryBefore = i === 0 || f.leadingSpace || (prev && prev.trailingSpace)
+
+    const next = frags[i + 1]
+    const fragEnd = next ? next.start : f.start + MAX_WORD_SECONDS
+
+    // Un mismo fragmento puede traer más de una palabra pegada (espacio
+    // *adentro* del texto) — se parte, y solo la primera sub-palabra respeta
+    // boundaryBefore; cualquier sub-palabra adicional es, por definición,
+    // una palabra nueva (el espacio que las separa está ahí mismo).
+    const subTokens = f.t.split(/\s+/).filter(Boolean)
+    subTokens.forEach((sub, subIdx) => {
+      const isLastSub = subIdx === subTokens.length - 1
+      const opensNewWord = subIdx > 0 || boundaryBefore || !word
+      if (opensNewWord) {
+        pushWord()
+        word = { t: sub, start: f.start, end: f.start }
+      } else {
+        word.t += sub
+      }
+      // Solo la última sub-palabra de este fragmento puede seguir
+      // extendiéndose con el fragmento siguiente.
+      word.end = isLastSub ? fragEnd : f.start
+    })
+  })
+  pushLine()
+
+  // 3) acotar palabras que se estiran sobre un interludio, y cerrar cada línea
+  for (const l of lines) {
+    for (const w of l.words) {
+      if (w.end - w.start > MAX_WORD_SECONDS) w.end = w.start + MAX_WORD_SECONDS
+      if (w.end <= w.start) w.end = w.start + 0.15 // piso: una palabra siempre barre algo
+    }
+    l.start = l.words[0].start
+    l.end = l.words[l.words.length - 1].end
+  }
 
   return { lines }
 }
@@ -213,7 +279,7 @@ function main() {
       if (usedNames.has(baseName.toLowerCase())) baseName = `${baseName} (${id})`
       usedNames.add(baseName.toLowerCase())
 
-      fs.writeFileSync(path.join(outDir, `${baseName}.m4a`), video)
+      if (!onlyLyrics) fs.writeFileSync(path.join(outDir, `${baseName}.m4a`), video)
       fs.writeFileSync(path.join(outDir, `${baseName}.json`), JSON.stringify(lyricsDoc))
       ok++
     } catch (err) {

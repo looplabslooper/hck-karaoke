@@ -1,6 +1,40 @@
 # Roadmap — Kiosco de Karaoke
 
-_Última actualización: 2026-07-31._
+_Última actualización: 2026-08-14._
+
+## Corregida la segmentación de palabras del catálogo legado (sesión 2026-08-14)
+
+Investigando la queja de "la sincronía no se siente confiable" se encontró que **87% del
+catálogo legado (6979 de 7005 canciones) mostraba la letra con las palabras mal cortadas** —
+sílabas sueltas en vez de palabras completas ("EN UNCA FE SEVIERON" en vez de "EN UN CAFE SE
+VIERON"). No era un bug de esta app: el dato ya venía mal generado desde
+`scripts/extract-legacy-catalog.mjs`.
+
+**Causa real**: el catálogo legado usa dos convenciones de espacio distintas para marcar bordes
+de palabra —espacio *antes* del fragmento (abre palabra nueva ahí mismo) vs. espacio *después*
+del fragmento (abre palabra nueva en el *siguiente* fragmento, no en éste)— y el parser viejo
+trataba ambas igual, además de no separar los casos donde un mismo fragmento trae más de una
+palabra corta pegada con un espacio adentro del propio texto. Ver el comentario de
+`parseLegacyLyrics()` en `scripts/extract-legacy-catalog.mjs` para el detalle completo.
+
+**Corrección aplicada en dos fases**: `extract-legacy-catalog.mjs --only-lyrics` regeneró los
+7005 `repertorio/*.json` con el parser corregido (0 fallos), y el nuevo
+`scripts/resync-legacy-lyrics.mjs` empujó lo corregido a la biblioteca en vivo correlacionando
+por nombre de archivo (sin fingerprint de texto — `audioPath` en la DB ya apunta al `.m4a` en
+`repertorio/`, que tiene el mismo nombre base que su `.json` hermano). 6979 canciones corregidas,
+26 sin cambios, 7 sin correlato en el catálogo legado (no se tocaron). Cada canción corregida
+tiene su versión original respaldada en `scripts/_backups/lyrics-fix-<timestamp>/`, restaurable
+con `node scripts/resync-legacy-lyrics.mjs --restore <timestamp>` — también revierte el
+`syncVerified` que la corrida puso en `false` para cualquier canción cuyo contenido cambió.
+
+Verificado: heurística automática (largo promedio de palabra) sobre las 7008 canciones con letra
+→ 0 sospechosas; muestreo manual de 18 canciones al azar, todas correctas.
+
+## Rework del flujo de sesión de karaoke (en curso)
+
+Ver **`PLAN-SESION-KARAOKE.md`** para el detalle completo: contexto, decisiones cerradas, y el
+estado etapa por etapa (Etapa 1, armado guiado, ya hecha y verificada; Etapa 2, el show —turnos,
+puntaje en vivo, cierre con resultados—, en curso).
 
 ## Catálogo legado migrado (sesión 2026-07-31)
 
@@ -41,7 +75,7 @@ Como consecuencia:
 - `apps/admin` ahora tiene un `kioskMode`: un botón "pantalla completa" oculta la navegación/biblioteca y muestra solo el fondo de video + la letra (con Fullscreen API real de por medio), con un botón para salir. La barra "marquesina" (play/pausa + scrubber) sigue visible arriba de todo.
 - `packages/shared/src/protocol.ts` perdió `ControlMsg`/`PlaybackStatusMsg`: ya no hace falta sincronizar dos clientes por WS, pausa/reanudar/seek son llamadas de función locales dentro del mismo componente. `ServerMsg` quedó solo con `snapshot`.
 - `apps/server/src/index.ts` perdió el relay genérico de mensajes WS (ya no hay a quién reenviarle nada); solo emite `snapshot` al conectar y tras cambios de estado.
-- `pnpm dev` ahora levanta únicamente `server` (:8080) + `admin` (:5174).
+- `pnpm dev` ahora levanta únicamente `server` (:8080) + `admin` (:5175).
 
 **Esto pisa una decisión previamente documentada en `DECISIONES-STACK.md`** (resumen ejecutivo, punto 2, y §5/§6): la separación control-remoto/pantalla fue explícitamente descartada por el usuario a favor de una sola superficie. `DECISIONES-STACK.md` no se reescribió — tiene una nota al pie en cada sección afectada señalando la reversión y por qué, para no perder el razonamiento original (útil si el proyecto alguna vez vuelve a necesitar multi-pantalla, p. ej. varias TVs).
 
@@ -55,12 +89,12 @@ Como consecuencia:
 - Generador de karaoke automático (`POST /api/songs/sync`): audio/video + letra pegada como texto → WhisperX alinea contra GPU (RTX 3070) → guarda `lyrics.json`. Probado con una canción real completa ("Tuyo" — Rodrigo Amarante), 0 palabras sin sincronizar tras el ajuste del límite de sanidad de duración por palabra.
 - Fondo de video global, siempre renderizado detrás de la letra (nunca la tapa, por diseño).
 - App única rediseñada: sidebar de navegación, biblioteca en tarjetas (el color del borde es la calidad de sincronía), barra "marquesina" persistente con play/pausa + scrubber, y modo pantalla completa (fondo + letra, Fullscreen API).
-- **Audio real con letra sincronizada, pausa/reanudar/seek y pantalla completa** funcionando y confirmado por el usuario dentro de la misma app (`localhost:5174`). El bug real que costó encontrar en su momento: faltaba `AudioContext.resume()` — el código corría sin errores pero no salía sonido.
+- **Audio real con letra sincronizada, pausa/reanudar/seek y pantalla completa** funcionando y confirmado por el usuario dentro de la misma app (`localhost:5175`). El bug real que costó encontrar en su momento: faltaba `AudioContext.resume()` — el código corría sin errores pero no salía sonido.
 - Selector de idioma en "Generar karaoke" (es/en/pt/fr/it/de) — antes de esto el pipeline siempre alineaba en español sin importar el idioma real de la canción, la causa raíz de la mayoría de los problemas de sincronía reportados. Ver el hallazgo grande más abajo.
 - `pipeline/align.py` corta la línea cuando detecta un hueco real (instrumental/silencio >1.2s) entre palabras, en vez de dejarlo "adentro" de una sola línea. `LyricsView` muestra puntitos + barra de espera durante esos huecos.
 - Seguridad: `pnpm audit` limpio (se corrigió una vulnerabilidad alta real en `drizzle-orm` y una moderada transitiva de `esbuild`).
 - **Rediseño visual completo** a partir de un mockup que el usuario armó con Claude Design ("HCK · High Class Karaoke", confirmado — ver memoria `project_hck_visual_rebrand`): paleta oscura + acento violeta único (Plus Jakarta Sans), biblioteca ahora es una tabla con **buscador y filtro por calidad de sincronía funcionando de verdad** (antes era un pendiente de esta lista) y orden A→Z/Z→A, "Generar karaoke" pasó a ser un wizard de 4 pasos con dropzone de arrastrar-y-soltar, control de **volumen real** (GainNode) en el reproductor, y botón "Mostrar letras" con overlay flotante (línea actual + preview de la siguiente) para ver la letra sin entrar a pantalla completa.
-- **"Entrada en vivo"** (`/walk-on`, botón propio en el sidebar): herramienta HTML/JS autocontenida (chroma key con cámara + fondo verde, o foto subida con máscara ovalada) que anima al próximo cantante caminando hacia el escenario. Se sirve tal cual desde `apps/server/public/`, no se portó a React — no tiene dependencias ni necesita build.
+- **"Cara en el escenario" integrado a la Sesión de Karaoke** (reemplaza la vieja `/walk-on`, que era una herramienta HTML suelta y desconectada de la app — sin fetch a la API, foto capturada de nuevo a mano cada vez). Ahora es un panel dentro de la página `cola` que lista los templates de Fun Box numerados; con sesión activa y pantalla completa, las teclas `1`-`9` (o click en el panel) disparan `FaceSwapOverlay` sobre quien está cantando, usando la foto ya guardada al registrar al cantante. Fotos (recorte ovalado + luminancia) y videos de templates se precalientan solos — al crear/recargar una sesión y al registrar un cantante nuevo (`apps/admin/src/faceSwapCache.ts`, efectos en `App.tsx`) — para que no haya demora la primera vez que se aprieta la tecla en vivo.
 
 El usuario probó a mano el merge screen+admin: reproducción, audio y pantalla completa andan bien ("se abre bien y se escucha bien"). Lo que estaba mal era la sincronización de la letra — ver el hallazgo grande abajo. El rediseño visual también se dio por bueno ("visualmente es lo que pedí").
 
@@ -136,13 +170,13 @@ Probado de punta a punta contra el servidor real: generé un `.cdg` sintético a
 ## Decisiones ya tomadas (no volver a discutir sin que lo pida el usuario)
 Detalle completo en `DECISIONES-STACK.md`. Resumen rápido:
 - Node **22.23.1** fijado en `.nvmrc` — versiones más nuevas no tenían binario precompilado de `better-sqlite3` en este entorno.
-- **Una sola app (`apps/admin`, puerto 5174) hace todo**: navegación, biblioteca y reproducción real de audio en la misma pantalla — reemplaza la separación control-remoto/pantalla que existía antes (ver nota arriba).
+- **Una sola app (`apps/admin`, puerto 5175) hace todo**: navegación, biblioteca y reproducción real de audio en la misma pantalla — reemplaza la separación control-remoto/pantalla que existía antes (ver nota arriba).
 - CD+G y videos con letra quemada van a un modo "completo" aparte (sin overlay propio, sin fondo elegible). **CD+G ya se reproduce de verdad** (parser + canvas propios, ver más arriba) y **`baked-video` también** (`<video>` nativo montado fuera del bloque de kiosco, para que alternar pantalla completa no lo remonte y corte la canción; mini-preview en backstage, pantalla entera en kiosco). Nota: el catálogo legado *no* usa este modo — resultó ser audio+letra, ver la sección de arriba.
 - Sincronización automática: LRCLIB (no implementado todavía) → WhisperX (implementado) → editor manual de corrección (implementado, pero a nivel línea — "Corregir sincronía" en la barra del reproductor — no palabra por palabra como preveía el plan original; alcanza para el caso real que lo motivó). APIs pagas (Deepgram, etc.) quedaron descartadas — no hacen falta.
 
 ## Cómo levantar el proyecto
 ```bash
 cd e:\Work
-pnpm dev        # server (:8080) + admin (:5174) juntos
+pnpm dev        # server (:8080) + admin (:5175) juntos
 ```
 Requiere Node 22.13+ (usar `.nvmrc`). Para el generador de karaoke hace falta `uv` instalado (`pipeline/`), con torch+CUDA si hay GPU NVIDIA disponible.

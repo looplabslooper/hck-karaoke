@@ -1,0 +1,1 @@
+ALTER TABLE `sessions` ADD `status` text DEFAULT 'armando' NOT NULL;

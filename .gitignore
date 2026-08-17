@@ -21,6 +21,8 @@ library/_imported/
 # Fotos de cantantes de la sesión activa — efímeras, se borran al terminar la
 # sesión (ver apps/server/src/index.ts, POST /api/sessions/end).
 library/_sessions/
+# Banners subidos a mano para el carrusel de Inicio (ver PROMPTS-BANNERS.md).
+library/_banners/
 
 # pack de templates para la animación de cara en el escenario (video.mp4 +
 # transform.json por carpeta) — el operador la puebla a mano, ver
@@ -42,3 +44,4 @@ pipeline/__pycache__/
 # editores / sistema
 .DS_Store
 Thumbs.db
+scripts/_backups/

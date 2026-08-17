@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer } from 'drizzle-orm/sqlite-core'
+import { sqliteTable, text, integer, real } from 'drizzle-orm/sqlite-core'
 
 /**
  * playbackMode/sourceFormat/syncQuality son texto libre (SQLite no tiene enum),
@@ -23,6 +23,9 @@ export const songs = sqliteTable('songs', {
    * sincronía antes de replicarlos al catálogo entero.
    */
   syncVerified: integer('sync_verified').notNull().default(0),
+  /** Uno de shared/domain.ts `GENRES`, puesto a mano por el operador — ningún
+   * importador trae género (ver plan de rediseño); null hasta que se etiquete. */
+  genre: text('genre'),
   createdAt: integer('created_at').notNull(),
 })
 
@@ -41,6 +44,10 @@ export const settings = sqliteTable('settings', {
 export const sessions = sqliteTable('sessions', {
   id: text('id').primaryKey(),
   startedAt: integer('started_at').notNull(),
+  // 'armando' = el admin todavía está cargando cantantes y sus canciones,
+  // 'corriendo' = ya empezó el show. Se persiste (en vez de ser estado de UI)
+  // para que recargar la pantalla en pleno armado no pierda el contexto.
+  status: text('status').notNull().default('armando'),
 })
 
 /**
@@ -54,6 +61,12 @@ export const singers = sqliteTable('singers', {
   sessionId: text('session_id').notNull(),
   name: text('name').notNull(),
   photoPath: text('photo_path'), // relativo a library/_sessions/<sessionId>/, null = sin foto
+  // Óvalo de recorte de cara calibrado a mano sobre la foto (fracciones del
+  // ancho/alto, misma convención que Template.transform.frames) — null =
+  // sin calibrar, se usa el óvalo centrado por default.
+  ovalCx: real('oval_cx'),
+  ovalCy: real('oval_cy'),
+  ovalScale: real('oval_scale'),
   createdAt: integer('created_at').notNull(),
 })
 
@@ -89,4 +102,16 @@ export const playlistSongs = sqliteTable('playlist_songs', {
   playlistId: text('playlist_id').notNull(),
   songId: text('song_id').notNull(),
   position: integer('position').notNull(),
+})
+
+/**
+ * Banners del carrusel de Inicio (ver PROMPTS-BANNERS.md) — solo imagen, sin
+ * título/subtítulo (si hace falta texto va quemado en la imagen que se sube).
+ * Lista abierta: se suben/borran/reordenan desde Configuración.
+ */
+export const banners = sqliteTable('banners', {
+  id: text('id').primaryKey(),
+  imagePath: text('image_path').notNull(), // relativo a library/_banners/
+  position: integer('position').notNull(),
+  createdAt: integer('created_at').notNull(),
 })
