@@ -13,12 +13,14 @@ import type {
   Singer,
   Song,
   Template,
+  TemplateRenderStatus,
 } from '@kiosco/shared'
 import { GENRES, CATEGORIES } from '@kiosco/shared'
 import { LyricsView } from './LyricsView'
 import { CdgPlayer } from './CdgPlayer'
 import { SingerPicker, type SingerPickerValue } from './SingerPicker'
 import { FaceSwapOverlay } from './FaceSwapOverlay'
+import { FaceSwapVideoOverlay } from './FaceSwapVideoOverlay'
 import { warmFaceCutout, type Oval } from './faceSwapCache'
 import { CategoryCarousel } from './CategoryCarousel'
 import { BannerCarousel } from './BannerCarousel'
@@ -33,6 +35,14 @@ import { Icon, type IconName } from './icons'
 // no un proceso ni una pestaña distinta.
 
 const EMPTY_LYRICS: LyricsDoc = { lines: [] }
+
+/** Lo que dispara un overlay de "cara en el escenario" — dos formas según el
+ * `kind` del template (ver domain.ts): `sticker` sigue componiendo en vivo
+ * con FaceSwapOverlay; `faceswap` solo reproduce el clip ya renderizado por
+ * el server (FaceSwapVideoOverlay), identificado por singerId+templateId. */
+type FaceSwapTrigger =
+  | { kind: 'sticker'; template: Extract<Template, { kind: 'sticker' }>; photoUrl: string; oval: Singer['oval'] }
+  | { kind: 'faceswap'; singerId: string; templateId: string }
 
 const QUALITY_LABEL: Record<Song['syncQuality'], string> = {
   excellent: 'Excelente',
@@ -85,6 +95,7 @@ type Page =
   | 'configuracion'
   | 'categorias'
   | 'banners'
+  | 'portadas'
   | 'importar'
 type WizardStep = 1 | 2 | 3 | 4
 
@@ -165,6 +176,11 @@ export function App() {
   // se suben/borran/reordenan desde Configuración → Banners de inicio.
   const [banners, setBanners] = useState<Banner[]>([])
   const [bannerUploading, setBannerUploading] = useState(false)
+  // Portada de cada categoría (ver CATEGORIES) — `null` si esa categoría
+  // todavía no tiene imagen subida. Se sube/borra desde Configuración →
+  // Portadas de categoría; CategoryCarousel la usa para el ícono de Inicio.
+  const [categoryImages, setCategoryImages] = useState<Record<string, string | null>>({})
+  const [categoryImageUploading, setCategoryImageUploading] = useState<CategoryId | null>(null)
 
   // Biblioteca: búsqueda + filtro por calidad de sincronía + orden + paginado
   // server-side — con catálogos de miles de canciones (ej. un importado
@@ -219,15 +235,17 @@ export function App() {
   const [songCounts, setSongCounts] = useState<Record<string, number>>({})
   const [funboxUploading, setFunboxUploading] = useState(false)
   const [funboxError, setFunboxError] = useState<string | null>(null)
+  const [funboxKind, setFunboxKind] = useState<'sticker' | 'faceswap'>('sticker')
   // Probar un template con la foto de un cantante real, sin depender de
   // pantalla completa ni de una canción sonando — para poder distinguir "no
   // mapea bien" de "no se ve nada" de "se queda en el primer frame".
   const [testSingerId, setTestSingerId] = useState<string | null>(null)
-  const [testFaceSwap, setTestFaceSwap] = useState<{
-    template: Template
-    photoUrl: string
-    oval: Singer['oval']
-  } | null>(null)
+  const [testFaceSwap, setTestFaceSwap] = useState<FaceSwapTrigger | null>(null)
+  // Estado de los renders `faceswap` en curso — { singerId: { templateId:
+  // status } }, poblado por polling mientras haya sesión (ver
+  // GET /api/sessions/current/faceswap-status). Determina qué hotkeys del
+  // panel en vivo están habilitados.
+  const [faceswapStatus, setFaceswapStatus] = useState<Record<string, Record<string, TemplateRenderStatus>>>({})
 
   // Cola en vivo + puntajes
   const [queue, setQueue] = useState<QueueItem[]>([])
@@ -355,6 +373,30 @@ export function App() {
     })
   }
 
+  async function refreshCategoryImages() {
+    const res = await fetch('/api/settings/category-images')
+    setCategoryImages(await res.json())
+  }
+
+  async function handleUploadCategoryImage(categoryId: CategoryId, file: File) {
+    setCategoryImageUploading(categoryId)
+    try {
+      const form = new FormData()
+      form.set('image', file)
+      const res = await fetch(`/api/settings/category-image/${categoryId}`, { method: 'POST', body: form })
+      const body = await res.json()
+      if (res.ok) setCategoryImages(body.images)
+    } finally {
+      setCategoryImageUploading(null)
+    }
+  }
+
+  async function handleDeleteCategoryImage(categoryId: CategoryId) {
+    const res = await fetch(`/api/settings/category-image/${categoryId}`, { method: 'DELETE' })
+    const body = await res.json()
+    if (res.ok) setCategoryImages(body.images)
+  }
+
   /** Vuelve a pedir la primera página con los filtros actuales — se usa al
    * cambiar búsqueda/filtro/orden y después de cualquier mutación (subir,
    * borrar, importar, etc). */
@@ -409,19 +451,39 @@ export function App() {
     setTemplates(await res.json())
   }
 
-  /** Sube un video crudo y corre el tracking por color en el server (ver
-   * pipeline/track_color.py) — sin esto habría que pasar por /template-editor
-   * o la terminal a mano. */
-  async function handleUploadTemplate(file: File) {
+  async function refreshFaceswapStatus() {
+    const res = await fetch('/api/sessions/current/faceswap-status')
+    setFaceswapStatus(await res.json())
+  }
+
+  // Mientras haya sesión, pollea el estado de los renders `faceswap` en curso
+  // — no hay bus de eventos por WS para esto (ver protocol.ts), mismo
+  // criterio que el resto de los refrescos de esta app. Cada pocos segundos
+  // alcanza: no es algo que tenga que reflejarse al instante.
+  useEffect(() => {
+    if (!session) return
+    refreshFaceswapStatus()
+    const interval = window.setInterval(refreshFaceswapStatus, 3000)
+    return () => window.clearInterval(interval)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.id])
+
+  /** Sube un video crudo — `kind: 'sticker'` corre el tracking por color en
+   * el server (pipeline/track_color.py); `kind: 'faceswap'` corre el
+   * análisis de cara real (pipeline/analyze_template_face.py), más lento.
+   * Sin esto habría que pasar por /template-editor o la terminal a mano. */
+  async function handleUploadTemplate(file: File, kind: 'sticker' | 'faceswap') {
     setFunboxUploading(true)
     setFunboxError(null)
     try {
       const form = new FormData()
       form.set('video', file)
+      form.set('kind', kind)
       const res = await fetch('/api/templates', { method: 'POST', body: form })
       const body = await res.json()
       if (!res.ok) throw new Error(body.error ?? 'No se pudo mapear el video')
       refreshTemplates()
+      if (kind === 'faceswap') refreshFaceswapStatus()
     } catch (err) {
       setFunboxError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -563,6 +625,7 @@ export function App() {
     refreshTemplates()
     refreshHomeCategories()
     refreshBanners()
+    refreshCategoryImages()
     refreshCameraDevices()
 
     const ws = new WebSocket(`ws://${location.hostname}:8080/ws`)
@@ -660,6 +723,10 @@ export function App() {
       } else if (kioskMode && session && e.key >= '1' && e.key <= '9') {
         const template = templates[Number(e.key) - 1]
         if (template) triggerFaceSwap(template)
+      } else if (kioskMode && e.key === '0') {
+        // "0" no mapea a ningún template — es el hotkey explícito para
+        // cortar el video de Fun Box en curso y volver al fondo.
+        setActiveFaceSwap(null)
       }
     }
     window.addEventListener('keydown', onKey)
@@ -1321,15 +1388,57 @@ export function App() {
   }
 
   // Animación de "cara en el escenario": atajo de teclado en pantalla
-  // completa (T), invisible para el público. Se guarda photoUrl junto al
-  // template en vez de re-derivarlo de `queue` en cada render — si la
-  // canción avanza mientras el overlay está en pantalla, no queremos que la
-  // cara cambie a mitad de la animación.
-  const [activeFaceSwap, setActiveFaceSwap] = useState<{
-    template: Template
-    photoUrl: string
-    oval: Singer['oval']
-  } | null>(null)
+  // completa (T), invisible para el público. Se guarda el trigger completo
+  // en vez de re-derivarlo de `queue` en cada render — si la canción avanza
+  // mientras el overlay está en pantalla, no queremos que la cara cambie a
+  // mitad de la animación.
+  const [activeFaceSwap, setActiveFaceSwap] = useState<FaceSwapTrigger | null>(null)
+  // Se suma en cada trigger nuevo y se usa como `key` del overlay: sin esto,
+  // tocar otro número mientras un video de Fun Box ya está sonando cambiaba
+  // el `videoUrl`/`template` del mismo <video> montado, y un <video> ya
+  // montado no relanza `autoPlay` solo con que cambie su `src` — quedaba
+  // congelado en el cuadro viejo en vez de arrancar el nuevo. Forzando un
+  // remount (key distinta) por cada trigger, sea el mismo template de nuevo
+  // o uno distinto, siempre arranca limpio.
+  const [activeFaceSwapNonce, setActiveFaceSwapNonce] = useState(0)
+
+  // Cierra el video de Fun Box en vuelo y vuelve al fondo — el fondo ya está
+  // montado debajo en todo momento (ver el JSX de `.performance` más abajo),
+  // así que alcanza con soltar el trigger. Se dispara solo: al salir de
+  // pantalla completa, y al cambiar la canción que está sonando (el hotkey
+  // "0" y "tocar otro número" se manejan aparte, en el handler de teclado).
+  useEffect(() => {
+    if (!kioskMode) setActiveFaceSwap(null)
+  }, [kioskMode])
+
+  const playingQueueItemId = queue.find((q) => q.status === 'playing')?.id ?? null
+  useEffect(() => {
+    setActiveFaceSwap(null)
+  }, [playingQueueItemId])
+
+  const stickerTemplates = templates.filter((t): t is Extract<Template, { kind: 'sticker' }> => t.kind === 'sticker')
+  const faceswapTemplates = templates.filter((t): t is Extract<Template, { kind: 'faceswap' }> => t.kind === 'faceswap')
+
+  // Progreso agregado de los renders faceswap en curso — cada combinación
+  // cantante-con-foto × template `faceswap` cuenta una vez. Sirve para un
+  // indicador ambiente (no hace falta ir tarjeta por tarjeta para saber
+  // cuánto falta), y como prueba visible de que agregar un cantante nuevo
+  // solo suma SUS combinaciones al total, no reprocesa las que ya estaban
+  // listas (ver triggerFaceSwapRendersForSinger en el server, ya es
+  // incremental).
+  const faceswapProgress = (() => {
+    if (faceswapTemplates.length === 0) return null
+    const singers = sessionSingers.filter((s) => s.photoUrl)
+    if (singers.length === 0) return null
+    let ready = 0
+    const total = singers.length * faceswapTemplates.length
+    for (const s of singers) {
+      for (const t of faceswapTemplates) {
+        if (faceswapStatus[s.id]?.[t.id] === 'ready') ready++
+      }
+    }
+    return { ready, total }
+  })()
 
   function triggerFaceSwap(template: Template) {
     // El panel se ve también fuera de pantalla completa (para previsualizar
@@ -1338,11 +1447,21 @@ export function App() {
     // clickear una tarjeta afuera de pantalla completa dejaba activeFaceSwap
     // seteado para siempre (el overlay nunca montaba, `onDone` nunca se
     // disparaba), bloqueando todo intento posterior hasta recargar la página.
-    if (!kioskMode || activeFaceSwap) return
+    if (!kioskMode) return
     const playingItem = queue.find((q) => q.status === 'playing')
     if (!playingItem?.singerPhotoUrl) return
     const singer = sessionSingers.find((s) => s.id === playingItem.singerId)
-    setActiveFaceSwap({ template, photoUrl: playingItem.singerPhotoUrl, oval: singer?.oval ?? null })
+    // A propósito, sin chequear si ya hay un activeFaceSwap en curso: tocar
+    // un número mientras otro video de Fun Box está sonando tiene que
+    // cambiar directo al nuevo (como un soundboard), no ignorar el toque.
+    // El remount limpio lo garantiza activeFaceSwapNonce, no este chequeo.
+    setActiveFaceSwapNonce((n) => n + 1)
+    if (template.kind === 'sticker') {
+      setActiveFaceSwap({ kind: 'sticker', template, photoUrl: playingItem.singerPhotoUrl, oval: singer?.oval ?? null })
+    } else {
+      if (!singer || faceswapStatus[singer.id]?.[template.id] !== 'ready') return
+      setActiveFaceSwap({ kind: 'faceswap', singerId: singer.id, templateId: template.id })
+    }
   }
 
   const singersWithPhoto = sessionSingers.filter((s): s is Singer & { photoUrl: string } => !!s.photoUrl)
@@ -1355,7 +1474,29 @@ export function App() {
     if (testFaceSwap) return
     const singer = singersWithPhoto.find((s) => s.id === testSingerId) ?? singersWithPhoto[0]
     if (!singer) return
-    setTestFaceSwap({ template, photoUrl: singer.photoUrl, oval: singer.oval })
+    if (template.kind === 'sticker') {
+      setTestFaceSwap({ kind: 'sticker', template, photoUrl: singer.photoUrl, oval: singer.oval })
+    } else {
+      if (faceswapStatus[singer.id]?.[template.id] !== 'ready') return
+      setTestFaceSwap({ kind: 'faceswap', singerId: singer.id, templateId: template.id })
+    }
+  }
+
+  /** Ruta del clip ya renderizado para este cantante+template `faceswap` —
+   * cae dentro de library/_sessions/, así que express.static ya lo sirve sin
+   * ninguna ruta nueva (ver /api/templates y app.use('/library', ...)). */
+  function faceSwapVideoUrl(singerId: string, templateId: string): string | null {
+    if (!session) return null
+    return `/library/_sessions/${session.id}/faceswap/${singerId}/${templateId}.mp4`
+  }
+
+  function renderFaceSwap(trigger: FaceSwapTrigger, onDone: () => void, key?: number) {
+    if (trigger.kind === 'sticker') {
+      return <FaceSwapOverlay key={key} template={trigger.template} photoUrl={trigger.photoUrl} oval={trigger.oval} onDone={onDone} />
+    }
+    const videoUrl = faceSwapVideoUrl(trigger.singerId, trigger.templateId)
+    if (!videoUrl) return null
+    return <FaceSwapVideoOverlay key={key} videoUrl={videoUrl} onDone={onDone} />
   }
 
   // Precalentado de "cara en el escenario": arranca solo al crear/recargar
@@ -1565,6 +1706,7 @@ export function App() {
             <CategoryCarousel
               key={catId}
               categoryId={catId}
+              imageUrl={categoryImages[catId] ?? null}
               nowPlayingId={nowPlayingSong?.id ?? null}
               sessionActive={!!session}
               onPlay={handlePlay}
@@ -1996,25 +2138,56 @@ export function App() {
                   <p className="hint">
                     Con pantalla completa activa, apretá el número para mostrarlo sobre quien está cantando.
                   </p>
+                  {faceswapProgress && faceswapProgress.ready < faceswapProgress.total && (
+                    <div className="facepanel-progress">
+                      <p className="hint">
+                        Preparando caras: {faceswapProgress.ready}/{faceswapProgress.total}
+                      </p>
+                      <div className="progress-track">
+                        <div
+                          className="progress-fill"
+                          style={{ width: `${(faceswapProgress.ready / faceswapProgress.total) * 100}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
                   {queue[0]?.status === 'playing' && !queue[0].singerPhotoUrl && (
                     <p className="hint facepanel-nophoto">
                       {queue[0].singer} no tiene foto cargada — el hotkey no va a mostrar nada hasta que le carguen una.
                     </p>
                   )}
                   <div className="facepanel-grid">
-                    {templates.slice(0, 9).map((t, i) => (
-                      <button
-                        key={t.id}
-                        type="button"
-                        className="facepanel-card"
-                        disabled={!kioskMode}
-                        title={kioskMode ? undefined : 'Solo funciona con pantalla completa activa'}
-                        onClick={() => triggerFaceSwap(t)}
-                      >
-                        <span className="tag tag-accent facepanel-key">{i + 1}</span>
-                        <video src={t.videoUrl} muted loop autoPlay playsInline />
-                      </button>
-                    ))}
+                    {templates.slice(0, 9).map((t, i) => {
+                      const playingSingerId = queue[0]?.status === 'playing' ? queue[0].singerId : undefined
+                      const status = t.kind === 'faceswap' && playingSingerId ? faceswapStatus[playingSingerId]?.[t.id] : undefined
+                      const notReady = t.kind === 'faceswap' && status !== 'ready'
+                      const disabled = !kioskMode || notReady
+                      const title = !kioskMode
+                        ? 'Solo funciona con pantalla completa activa'
+                        : notReady
+                          ? status === 'failed'
+                            ? 'No se pudo generar el swap para este cantante'
+                            : 'Preparando el swap para este cantante…'
+                          : undefined
+                      return (
+                        <button
+                          key={t.id}
+                          type="button"
+                          className="facepanel-card"
+                          disabled={disabled}
+                          title={title}
+                          onClick={() => triggerFaceSwap(t)}
+                        >
+                          <span className="tag tag-accent facepanel-key">{i + 1}</span>
+                          <video src={t.videoUrl} muted loop autoPlay playsInline />
+                          {notReady && (
+                            <span className={`facepanel-status${status === 'failed' ? ' facepanel-status-error' : ''}`}>
+                              {status === 'failed' ? 'Error' : 'Preparando…'}
+                            </span>
+                          )}
+                        </button>
+                      )
+                    })}
                   </div>
                 </>
               )}
@@ -2413,6 +2586,29 @@ export function App() {
           </div>
           <div className="panel" style={{ maxWidth: '640px' }}>
             <div className="field">
+              <label>Tipo de template</label>
+              <div className="funbox-kind-picker">
+                <label>
+                  <input
+                    type="radio"
+                    name="funboxKind"
+                    checked={funboxKind === 'sticker'}
+                    onChange={() => setFunboxKind('sticker')}
+                  />
+                  Sticker por color
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    name="funboxKind"
+                    checked={funboxKind === 'faceswap'}
+                    onChange={() => setFunboxKind('faceswap')}
+                  />
+                  Face swap con IA
+                </label>
+              </div>
+            </div>
+            <div className="field">
               <label>Subir video nuevo</label>
               <input
                 type="file"
@@ -2420,16 +2616,24 @@ export function App() {
                 disabled={funboxUploading}
                 onChange={(e) => {
                   const file = e.target.files?.[0]
-                  if (file) handleUploadTemplate(file)
+                  if (file) handleUploadTemplate(file, funboxKind)
                   e.target.value = ''
                 }}
               />
-              <p className="hint">
-                Corre el tracking por color automáticamente (unos segundos) — el video tiene que tener la máscara/capucha
-                de color saturado que pide el director de escenas.
-              </p>
+              {funboxKind === 'sticker' ? (
+                <p className="hint">
+                  Corre el tracking por color automáticamente (unos segundos) — el video tiene que tener la
+                  máscara/capucha de color saturado que pide el director de escenas.
+                </p>
+              ) : (
+                <p className="hint">
+                  Corre el análisis de cara real automáticamente (puede tardar uno o dos minutos, no bloquea nada
+                  mientras tanto) — el video tiene que mostrar la cara del protagonista bien visible, de frente o
+                  3/4, con buena luz.
+                </p>
+              )}
             </div>
-            {funboxUploading && <p className="hint">Mapeando…</p>}
+            {funboxUploading && <p className="hint">{funboxKind === 'sticker' ? 'Mapeando…' : 'Analizando la cara…'}</p>}
             {funboxError && <p className="error">{funboxError}</p>}
           </div>
 
@@ -2459,27 +2663,36 @@ export function App() {
           )}
 
           <div className="playlist-grid">
-            {templates.map((t) => (
-              <div className="card" key={t.id}>
-                <video src={t.videoUrl} muted controls style={{ width: '100%', borderRadius: 'var(--radius-sm)' }} />
-                <div className="card-meta" style={{ marginTop: '0.5rem' }}>
-                  {t.id}
+            {templates.map((t) => {
+              const testSinger = singersWithPhoto.find((s) => s.id === testSingerId) ?? singersWithPhoto[0]
+              const testStatus = t.kind === 'faceswap' && testSinger ? faceswapStatus[testSinger.id]?.[t.id] : undefined
+              const testNotReady = t.kind === 'faceswap' && testStatus !== 'ready'
+              const testDisabled = singersWithPhoto.length === 0 || testNotReady
+              const testTitle =
+                singersWithPhoto.length === 0
+                  ? 'Necesitás un cantante con foto para probar'
+                  : testNotReady
+                    ? testStatus === 'failed'
+                      ? 'No se pudo generar el swap para este cantante'
+                      : 'Preparando el swap para este cantante…'
+                    : undefined
+              return (
+                <div className="card" key={t.id}>
+                  <video src={t.videoUrl} muted controls style={{ width: '100%', borderRadius: 'var(--radius-sm)' }} />
+                  <div className="card-meta" style={{ marginTop: '0.5rem' }}>
+                    <span className="tag">{t.kind === 'faceswap' ? 'Face swap IA' : 'Sticker'}</span> {t.id}
+                  </div>
+                  <div className="funbox-card-actions">
+                    <button className="btn-secondary" disabled={testDisabled} title={testTitle} onClick={() => testFunboxTemplate(t)}>
+                      <Icon name="wand" size={14} /> Probar
+                    </button>
+                    <button className="btn-danger" onClick={() => handleDeleteTemplate(t.id)}>
+                      <Icon name="trash" size={14} /> Eliminar
+                    </button>
+                  </div>
                 </div>
-                <div className="funbox-card-actions">
-                  <button
-                    className="btn-secondary"
-                    disabled={singersWithPhoto.length === 0}
-                    title={singersWithPhoto.length === 0 ? 'Necesitás un cantante con foto para probar' : undefined}
-                    onClick={() => testFunboxTemplate(t)}
-                  >
-                    <Icon name="wand" size={14} /> Probar
-                  </button>
-                  <button className="btn-danger" onClick={() => handleDeleteTemplate(t.id)}>
-                    <Icon name="trash" size={14} /> Eliminar
-                  </button>
-                </div>
-              </div>
-            ))}
+              )
+            })}
             {templates.length === 0 && <p className="hint">Todavía no hay ningún template — subí el primero arriba.</p>}
           </div>
         </section>
@@ -2507,6 +2720,11 @@ export function App() {
               <Icon name="grid" size={22} />
               <div className="card-title">Banners de inicio</div>
               <div className="card-body">El carrusel panorámico arriba de las categorías en Inicio.</div>
+            </div>
+            <div className="card hub-card" onClick={() => setPage('portadas')}>
+              <Icon name="camera" size={22} />
+              <div className="card-title">Portadas de categoría</div>
+              <div className="card-body">Una imagen por categoría, para identificarlas de un vistazo en Inicio.</div>
             </div>
           </div>
         </section>
@@ -2675,6 +2893,68 @@ export function App() {
           </div>
         </section>
 
+        <section className={`page${page === 'portadas' ? ' active' : ''}`}>
+          <div className="stage-head">
+            <div>
+              <h1>Portadas de categoría</h1>
+              <p>Una imagen por categoría — se achica y recorta sola a un cuadrado parejo al subirla.</p>
+            </div>
+          </div>
+          <button className="btn-ghost" style={{ width: 'fit-content' }} onClick={() => setPage('configuracion')}>
+            <Icon name="chevL" size={15} /> Configuración
+          </button>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', maxWidth: '780px' }}>
+            {CATEGORIES.map((c) => {
+              const imageUrl = categoryImages[c.id]
+              const uploading = categoryImageUploading === c.id
+              return (
+                <div
+                  className="card"
+                  key={c.id}
+                  style={{ width: '160px', padding: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', alignItems: 'center' }}
+                >
+                  <div
+                    style={{
+                      width: '96px',
+                      height: '96px',
+                      borderRadius: '10px',
+                      overflow: 'hidden',
+                      background: imageUrl ? 'transparent' : songColor(c.id),
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    {imageUrl && <img src={imageUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />}
+                  </div>
+                  <div className="card-title" style={{ fontSize: '0.85rem', textAlign: 'center' }}>
+                    {c.name}
+                  </div>
+                  <label className="btn-secondary" style={{ width: '100%', textAlign: 'center', cursor: 'pointer' }}>
+                    {uploading ? 'Subiendo…' : imageUrl ? 'Cambiar imagen' : 'Subir imagen'}
+                    <input
+                      type="file"
+                      accept="image/*"
+                      style={{ display: 'none' }}
+                      disabled={uploading}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0]
+                        if (file) handleUploadCategoryImage(c.id, file)
+                        e.target.value = ''
+                      }}
+                    />
+                  </label>
+                  {imageUrl && (
+                    <button className="btn-ghost" style={{ width: '100%' }} onClick={() => handleDeleteCategoryImage(c.id)}>
+                      Quitar
+                    </button>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </section>
+
         <section className={`page${page === 'importar' ? ' active' : ''}`}>
           <div className="stage-head">
             <div>
@@ -2785,25 +3065,11 @@ export function App() {
 
       {/* Prueba de Fun Box: fuera del gate de kioskMode a propósito — se
           dispara desde Studio, no desde una sesión en vivo. */}
-      {testFaceSwap && (
-        <FaceSwapOverlay
-          template={testFaceSwap.template}
-          photoUrl={testFaceSwap.photoUrl}
-          oval={testFaceSwap.oval}
-          onDone={() => setTestFaceSwap(null)}
-        />
-      )}
+      {testFaceSwap && renderFaceSwap(testFaceSwap, () => setTestFaceSwap(null))}
 
       {kioskMode && (
         <div className="performance">
-          {activeFaceSwap && (
-            <FaceSwapOverlay
-              template={activeFaceSwap.template}
-              photoUrl={activeFaceSwap.photoUrl}
-              oval={activeFaceSwap.oval}
-              onDone={() => setActiveFaceSwap(null)}
-            />
-          )}
+          {activeFaceSwap && renderFaceSwap(activeFaceSwap, () => setActiveFaceSwap(null), activeFaceSwapNonce)}
           {liveCameraStream ? (
             <LiveBackgroundVideo stream={liveCameraStream} />
           ) : (
@@ -3016,7 +3282,7 @@ export function App() {
                 setPushSingerOval(v.oval)
               }}
               onEnter={submitPushPlaylist}
-              previewTemplate={templates[0]}
+              previewTemplate={stickerTemplates[0]}
             />
             <div className="step-actions">
               <button className="btn-secondary" onClick={() => setPushPlaylist(null)}>
@@ -3045,7 +3311,7 @@ export function App() {
                 setQueueSingerOval(v.oval)
               }}
               onEnter={submitAddToQueue}
-              previewTemplate={templates[0]}
+              previewTemplate={stickerTemplates[0]}
             />
             <div className="step-actions">
               <button className="btn-secondary" onClick={() => setQueueSong(null)}>
@@ -3068,6 +3334,7 @@ export function App() {
           songCounts={songCounts}
           queuedTotal={queue.length}
           templates={templates}
+          faceswapStatus={faceswapStatus}
           onSingerCreated={refreshSession}
           onSongsQueued={refreshQueue}
           onBegin={handleBeginSession}

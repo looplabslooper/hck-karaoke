@@ -1,5 +1,6 @@
 import crypto from 'node:crypto'
 import { eq, and, asc, desc, sql } from 'drizzle-orm'
+import { CATEGORIES } from '@kiosco/shared'
 import type {
   Song,
   PlaybackMode,
@@ -226,6 +227,44 @@ export function setBackgroundVideo(relativePath: string): void {
     .values({ key: 'backgroundVideoPath', value: relativePath })
     .onConflictDoUpdate({ target: settings.key, set: { value: relativePath } })
     .run()
+}
+
+// --- portadas de categoría --------------------------------------------------
+
+function categoryImageKey(categoryId: CategoryId): string {
+  return `categoryImage:${categoryId}`
+}
+
+/** Una fila de `settings` por categoría (conjunto fijo de 7, ver CATEGORIES),
+ * en vez de una tabla nueva — mismo criterio que homeCategories/
+ * backgroundVideoPath. El valor guarda `updatedAt` además del path porque el
+ * nombre de archivo es fijo por categoría (`_categories/<id>.png`, siempre se
+ * pisa al re-subir) — sin un cache-buster en la URL, el navegador podría
+ * seguir mostrando la imagen vieja después de cambiarla. */
+export function getCategoryImages(): Record<CategoryId, string | null> {
+  const result = {} as Record<CategoryId, string | null>
+  for (const { id } of CATEGORIES) {
+    const row = db.select().from(settings).where(eq(settings.key, categoryImageKey(id))).get()
+    result[id] = null
+    if (!row) continue
+    try {
+      const parsed = JSON.parse(row.value) as { path?: string; updatedAt?: number }
+      if (parsed.path) result[id] = `/library/${parsed.path}?v=${parsed.updatedAt ?? 0}`
+    } catch {
+      // fila corrupta o de otro formato — se trata como "sin imagen" en vez de romper el endpoint entero.
+    }
+  }
+  return result
+}
+
+export function setCategoryImage(categoryId: CategoryId, relativePath: string): void {
+  const key = categoryImageKey(categoryId)
+  const value = JSON.stringify({ path: relativePath, updatedAt: Date.now() })
+  db.insert(settings).values({ key, value }).onConflictDoUpdate({ target: settings.key, set: { value } }).run()
+}
+
+export function deleteCategoryImage(categoryId: CategoryId): void {
+  db.delete(settings).where(eq(settings.key, categoryImageKey(categoryId))).run()
 }
 
 // --- carpetas de importación (bibliotecas externas, sin copiar a library/) --

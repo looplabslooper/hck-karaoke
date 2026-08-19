@@ -1,5 +1,10 @@
 import type { Template } from '@kiosco/shared'
 
+/** interpolate()/el compositor solo aplican al tipo `sticker` (el que trae
+ * `transform`) — el tipo `faceswap` no tiene curva que interpolar, el clip ya
+ * viene compuesto del server. */
+export type StickerTemplate = Extract<Template, { kind: 'sticker' }>
+
 // Misma proporción de ejes que pipeline/track_color.py, pipeline/compose_preview.py
 // y template-editor.html — `scale` es "distancia interocular (o equivalente)
 // normalizada por el ancho del frame", y estos factores convierten eso en el
@@ -106,7 +111,7 @@ export function averageLuminance(ctx: CanvasRenderingContext2D, x: number, y: nu
   return count > 0 ? sum / count : 128
 }
 
-type Frame = Template['transform']['frames'][number]
+type Frame = StickerTemplate['transform']['frames'][number]
 type ResolvedFrame = { t: number; cx: number; cy: number; angle: number; scale: number }
 
 /** Interpola cx/cy/angle/scale entre los dos frames de transform.json más

@@ -93,21 +93,39 @@ export interface Singer {
   oval: { cx: number; cy: number; scale: number } | null
 }
 
-/** Pista de posición/ángulo/escala del "slot" de cara en un video-template
- * (ver pipeline/track_color.py y pipeline/track_face.py) — cx/cy/scale
- * normalizados contra width/height, angle en radianes. `visible: false`
- * indica un tramo sin detección; el consumidor sostiene el último valor
- * visible en esos huecos. */
-export interface Template {
-  id: string
-  videoUrl: string
-  transform: {
-    fps: number
-    width: number
-    height: number
-    frames: { t: number; cx: number | null; cy: number | null; angle: number | null; scale: number | null; visible: boolean }[]
-  }
-}
+/**
+ * Template de "cara en el escenario" — dos técnicas conviven bajo el mismo tipo:
+ * - `sticker`: el protagonista del video NO tiene rostro real (capucha de color,
+ *   ver .claude/agents/director-escenas.md); `transform` trackea la posición del
+ *   blob de color (pipeline/track_color.py) y el cliente pega un recorte ovalado
+ *   de la foto en vivo, cuadro a cuadro (FaceSwapOverlay.tsx). Instantáneo.
+ * - `faceswap`: el protagonista SÍ tiene un rostro real, que la IA reemplaza de
+ *   verdad (pipeline/analyze_template_face.py + render_singer_faceswap.py). No
+ *   hay `transform` — en cambio, cada cantante tiene un clip ya renderizado
+ *   (pre-generado en segundo plano al cargar su foto, ver
+ *   /api/sessions/current/faceswap-status) que el cliente solo reproduce.
+ *
+ * `transform.frames[].visible: false` (solo aplica a `sticker`) indica un tramo
+ * sin detección; el consumidor sostiene el último valor visible en esos huecos.
+ */
+export type Template =
+  | {
+      id: string
+      videoUrl: string
+      kind: 'sticker'
+      transform: {
+        fps: number
+        width: number
+        height: number
+        frames: { t: number; cx: number | null; cy: number | null; angle: number | null; scale: number | null; visible: boolean }[]
+      }
+    }
+  | { id: string; videoUrl: string; kind: 'faceswap' }
+
+/** Estado de render de un clip cantante+template `faceswap` (ver
+ * GET /api/sessions/current/faceswap-status) — `ready` es el único estado en
+ * que hay algo para reproducir; los demás dejan el hotkey deshabilitado. */
+export type TemplateRenderStatus = 'pending' | 'ready' | 'failed'
 
 /** Lista curada de antemano, para empujar varias canciones a la cola de una vez. */
 export interface Playlist {

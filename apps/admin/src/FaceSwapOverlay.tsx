@@ -1,5 +1,4 @@
 import { useEffect, useRef } from 'react'
-import type { Template } from '@kiosco/shared'
 import {
   AXIS_RATIO_X,
   AXIS_RATIO_Y,
@@ -10,20 +9,23 @@ import {
   loadFaceCutout,
   TARGET_COVERAGE,
   type Oval,
+  type StickerTemplate,
 } from './faceSwapCache'
 
 interface Props {
-  template: Template
+  template: StickerTemplate
   photoUrl: string
   oval: Oval | null
   onDone: () => void
 }
 
 /**
- * Overlay transitorio del kiosco: pega la foto del cantante sobre el video-
- * template durante unos segundos. A diferencia del <video> de la canción
- * (que vive siempre montado, ver gotcha en CLAUDE.md), este SÍ se monta/
- * desmonta libremente — es efímero por diseño.
+ * Overlay transitorio del kiosco para templates `sticker`: pega la foto del
+ * cantante sobre el video-template durante unos segundos. A diferencia del
+ * <video> de la canción (que vive siempre montado, ver gotcha en CLAUDE.md),
+ * este SÍ se monta/desmonta libremente — es efímero por diseño. Los
+ * templates `faceswap` usan FaceSwapVideoOverlay en su lugar (el clip ya
+ * viene compuesto del server, no hay nada que interpolar acá).
  */
 export function FaceSwapOverlay({ template, photoUrl, oval, onDone }: Props) {
   const videoRef = useRef<HTMLVideoElement | null>(null)

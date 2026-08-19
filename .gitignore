@@ -11,6 +11,10 @@ dist/
 # contenido pesado / referencia (no se versiona)
 /old/
 /repertorio/
+# Carpeta de paso para archivos que el operador acerca a mano (ej. imágenes
+# pegadas en el chat que Claude no puede leer directo) — se procesan y se
+# mueven/borran, no vive nada acá de forma permanente.
+/_incoming-assets/
 library/**/*.mp3
 library/**/*.wav
 library/**/*.opus
@@ -23,6 +27,8 @@ library/_imported/
 library/_sessions/
 # Banners subidos a mano para el carrusel de Inicio (ver PROMPTS-BANNERS.md).
 library/_banners/
+# Portadas subidas a mano para las categorías de Inicio (una por CategoryId).
+library/_categories/
 
 # pack de templates para la animación de cara en el escenario (video.mp4 +
 # transform.json por carpeta) — el operador la puebla a mano, ver

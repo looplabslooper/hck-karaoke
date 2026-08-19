@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { Singer, Song, Template } from '@kiosco/shared'
+import type { Singer, Song, Template, TemplateRenderStatus } from '@kiosco/shared'
 import { SingerPicker, type SingerPickerValue } from './SingerPicker'
 import { songColor } from './songColor'
 import { Icon } from './icons'
 import { loadFaceCutout } from './faceSwapCache'
 
-type Step = 'singer' | 'songs' | 'next' | 'warn-single' | 'syncing'
+type Step = 'singer' | 'songs' | 'next' | 'warn-single' | 'warn-faceswap' | 'syncing'
 
 interface Props {
   sessionSingers: Singer[]
@@ -13,6 +13,9 @@ interface Props {
   songCounts: Record<string, number>
   queuedTotal: number
   templates: Template[]
+  /** Estado de los renders `faceswap` en curso — { singerId: { templateId:
+   * status } }, ver GET /api/sessions/current/faceswap-status en App.tsx. */
+  faceswapStatus: Record<string, Record<string, TemplateRenderStatus>>
   onSingerCreated: () => Promise<void> | void
   onSongsQueued: () => Promise<void> | void
   /** Pasa la sesión a 'corriendo'. Se llama recién con todo precalentado. */
@@ -34,11 +37,44 @@ export function SessionSetupWizard({
   songCounts,
   queuedTotal,
   templates,
+  faceswapStatus,
   onSingerCreated,
   onSongsQueued,
   onBegin,
   onClose,
 }: Props) {
+  // El preview "en contexto" del calibrador de óvalo solo aplica a templates
+  // `sticker` (los `faceswap` no usan óvalo manual, ver OvalCalibrator.tsx).
+  const stickerPreviewTemplate = templates.find((t): t is Extract<Template, { kind: 'sticker' }> => t.kind === 'sticker')
+  const faceswapTemplates = templates.filter((t): t is Extract<Template, { kind: 'faceswap' }> => t.kind === 'faceswap')
+
+  // Cantantes con foto cuyo render `faceswap` todavía no está listo para
+  // ALGÚN template — se usa tanto para el aviso al arrancar como para el
+  // indicador chico en el roster (paso "next").
+  const singersWithPendingFaceswap = useMemo(() => {
+    if (faceswapTemplates.length === 0) return []
+    return sessionSingers.filter(
+      (s) => s.photoUrl && faceswapTemplates.some((t) => faceswapStatus[s.id]?.[t.id] !== 'ready'),
+    )
+  }, [sessionSingers, faceswapTemplates, faceswapStatus])
+
+  // Agregado ready/total para la barra de progreso del roster — cada
+  // combinación cantante-con-foto × template `faceswap` cuenta una vez. Al
+  // sumar un cantante nuevo, solo crece `total`; lo que ya estaba `ready`
+  // para los demás sigue contando (el server no lo vuelve a renderizar, ver
+  // triggerFaceSwapRendersForSinger).
+  const faceswapProgress = useMemo(() => {
+    const singers = sessionSingers.filter((s) => s.photoUrl)
+    if (faceswapTemplates.length === 0 || singers.length === 0) return null
+    let ready = 0
+    for (const s of singers) {
+      for (const t of faceswapTemplates) {
+        if (faceswapStatus[s.id]?.[t.id] === 'ready') ready++
+      }
+    }
+    return { ready, total: singers.length * faceswapTemplates.length }
+  }, [sessionSingers, faceswapTemplates, faceswapStatus])
+
   const [step, setStep] = useState<Step>(sessionSingers.length > 0 ? 'next' : 'singer')
   const [singerValue, setSingerValue] = useState<SingerPickerValue>(EMPTY_SINGER)
   const [busy, setBusy] = useState(false)
@@ -151,6 +187,21 @@ export function SessionSetupWizard({
       setError('Todavía no hay ninguna canción en la cola — cargale al menos una a alguien.')
       return
     }
+    if (singersWithPendingFaceswap.length > 0) {
+      setStep('warn-faceswap')
+      return
+    }
+    if (sessionSingers.length < 2) {
+      setStep('warn-single')
+      return
+    }
+    void runBegin()
+  }
+
+  /** Confirmación de "Comenzar igual" desde el aviso de faceswap pendiente —
+   * sigue encadenando al resto de los chequeos en vez de arrancar directo,
+   * para no saltearse el aviso de "un solo cantante" si aplica también. */
+  function confirmFaceswapWarning() {
     if (sessionSingers.length < 2) {
       setStep('warn-single')
       return
@@ -233,7 +284,7 @@ export function SessionSetupWizard({
               onChange={setSingerValue}
               autoFocus
               hideSuggestions
-              previewTemplate={templates[0]}
+              previewTemplate={stickerPreviewTemplate}
               onEnter={submitSinger}
             />
             {error && <p className="error">{error}</p>}
@@ -316,20 +367,41 @@ export function SessionSetupWizard({
 
         {step === 'next' && (
           <>
-            <div className="wizard-roster">
-              {sessionSingers.map((s) => (
-                <div className="wizard-roster-row" key={s.id}>
-                  {s.photoUrl ? (
-                    <img className="singer-thumb" src={s.photoUrl} alt="" />
-                  ) : (
-                    <span className="singer-chip-avatar">{s.name[0]?.toUpperCase()}</span>
-                  )}
-                  <span className="wizard-roster-name">{s.name}</span>
-                  <span className={`tag ${songCounts[s.id] ? 'tag-neutral' : 'tag-outline'}`}>
-                    {songCounts[s.id] ?? 0} canción{(songCounts[s.id] ?? 0) === 1 ? '' : 'es'}
-                  </span>
+            {faceswapProgress && faceswapProgress.ready < faceswapProgress.total && (
+              <div className="facepanel-progress">
+                <p className="hint">
+                  Preparando caras para Fun Box: {faceswapProgress.ready}/{faceswapProgress.total}
+                </p>
+                <div className="progress-track">
+                  <div
+                    className="progress-fill"
+                    style={{ width: `${(faceswapProgress.ready / faceswapProgress.total) * 100}%` }}
+                  />
                 </div>
-              ))}
+              </div>
+            )}
+            <div className="wizard-roster">
+              {sessionSingers.map((s) => {
+                const pendingFaceswap = singersWithPendingFaceswap.some((p) => p.id === s.id)
+                return (
+                  <div className="wizard-roster-row" key={s.id}>
+                    {s.photoUrl ? (
+                      <img className="singer-thumb" src={s.photoUrl} alt="" />
+                    ) : (
+                      <span className="singer-chip-avatar">{s.name[0]?.toUpperCase()}</span>
+                    )}
+                    <span className="wizard-roster-name">{s.name}</span>
+                    {pendingFaceswap && (
+                      <span className="tag tag-outline" title="Preparando su cara para uno o más templates">
+                        Preparando cara…
+                      </span>
+                    )}
+                    <span className={`tag ${songCounts[s.id] ? 'tag-neutral' : 'tag-outline'}`}>
+                      {songCounts[s.id] ?? 0} canción{(songCounts[s.id] ?? 0) === 1 ? '' : 'es'}
+                    </span>
+                  </div>
+                )
+              })}
             </div>
 
             {singersWithoutSongs.length > 0 && (
@@ -346,6 +418,24 @@ export function SessionSetupWizard({
               </button>
               <button className="btn-primary" onClick={requestBegin} disabled={busy}>
                 Comenzar la sesión
+              </button>
+            </div>
+          </>
+        )}
+
+        {step === 'warn-faceswap' && (
+          <>
+            <p className="wizard-warn">
+              Todavía se está preparando la cara de <strong>{singersWithPendingFaceswap.map((s) => s.name).join(', ')}</strong>{' '}
+              para uno o más templates de Fun Box. Si arrancás ahora, esos hotkeys pueden no estar listos apenas les
+              toque el turno.
+            </p>
+            <div className="step-actions">
+              <button className="btn-secondary" onClick={() => setStep('next')}>
+                Esperar un poco más
+              </button>
+              <button className="btn-primary" onClick={confirmFaceswapWarning}>
+                Comenzar igual
               </button>
             </div>
           </>

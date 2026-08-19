@@ -6,6 +6,7 @@ import { songColor } from './songColor'
 
 interface Props {
   categoryId: CategoryId
+  imageUrl: string | null
   nowPlayingId: string | null
   sessionActive: boolean
   onPlay: (id: string) => void
@@ -17,7 +18,7 @@ const PAGE_SIZE = 6
 
 /** Carrusel de una categoría de Inicio — 6 visibles, navega hasta 15 (las
  * que devuelva /api/songs/category/:id) con flechas y puntos. */
-export function CategoryCarousel({ categoryId, nowPlayingId, sessionActive, onPlay, onAddQueue, onViewAll }: Props) {
+export function CategoryCarousel({ categoryId, imageUrl, nowPlayingId, sessionActive, onPlay, onAddQueue, onViewAll }: Props) {
   const [songs, setSongs] = useState<Song[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(0)
@@ -46,6 +47,7 @@ export function CategoryCarousel({ categoryId, nowPlayingId, sessionActive, onPl
   return (
     <div className="carousel">
       <div className="carousel-head">
+        {imageUrl && <img className="carousel-cover-icon" src={imageUrl} alt="" />}
         <h3>{category?.name ?? categoryId}</h3>
         <span className="carousel-count">{total} canciones</span>
         <button className="btn-ghost carousel-viewall" onClick={onViewAll}>

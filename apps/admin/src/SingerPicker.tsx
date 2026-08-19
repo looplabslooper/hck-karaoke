@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Singer, Template } from '@kiosco/shared'
-import type { Oval } from './faceSwapCache'
+import type { Singer } from '@kiosco/shared'
+import type { Oval, StickerTemplate } from './faceSwapCache'
 import { OvalCalibrator } from './OvalCalibrator'
 
 export interface SingerPickerValue {
@@ -18,10 +18,11 @@ interface Props {
   allowBlank?: boolean
   autoFocus?: boolean
   onEnter?: () => void
-  /** Template usado para el preview "en contexto" durante la calibración del
-   * óvalo — si no hay ninguno (Fun Box vacío todavía), la calibración muestra
-   * solo la foto con el óvalo encima. */
-  previewTemplate?: Template
+  /** Template `sticker` usado para el preview "en contexto" durante la
+   * calibración del óvalo — si no hay ninguno (Fun Box vacío, o solo hay
+   * templates `faceswap`), la calibración muestra solo la foto con el óvalo
+   * encima. */
+  previewTemplate?: StickerTemplate
   /** El armado guiado ya pregunta el nombre en su propio paso; ahí conviene
    * esconder el autocompletado de cantantes ya cargados. */
   hideSuggestions?: boolean

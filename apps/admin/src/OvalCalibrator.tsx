@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { Template } from '@kiosco/shared'
 import {
   AXIS_RATIO_X,
   AXIS_RATIO_Y,
@@ -9,6 +8,7 @@ import {
   TARGET_COVERAGE,
   type Oval,
   ovalMaskCutout,
+  type StickerTemplate,
 } from './faceSwapCache'
 
 interface Props {
@@ -16,9 +16,10 @@ interface Props {
   image: HTMLImageElement
   value: Oval
   onChange: (oval: Oval) => void
-  /** Si hay al menos un template, se muestra el preview "así se ve en el
-   * escenario" al lado, recompuesto en vivo mientras se mueve el óvalo. */
-  previewTemplate?: Template
+  /** Si hay al menos un template `sticker`, se muestra el preview "así se ve
+   * en el escenario" al lado, recompuesto en vivo mientras se mueve el óvalo
+   * — el óvalo manual solo aplica a ese tipo, los `faceswap` no lo usan. */
+  previewTemplate?: StickerTemplate
 }
 
 const MIN_SCALE = 0.08
@@ -191,7 +192,7 @@ export function OvalCalibrator({ image, value, onChange, previewTemplate }: Prop
 /** El mismo compuesto que se va a ver en vivo (FaceSwapOverlay), pero de un
  * solo cuadro (t=0) y recalculado en cada ajuste — así el operador calibra
  * mirando el resultado real y no una abstracción. */
-function StagePreview({ image, oval, template }: { image: HTMLImageElement; oval: Oval; template: Template }) {
+function StagePreview({ image, oval, template }: { image: HTMLImageElement; oval: Oval; template: StickerTemplate }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
 

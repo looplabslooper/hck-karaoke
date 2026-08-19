@@ -6,8 +6,8 @@ import { fileURLToPath } from 'node:url'
 import express from 'express'
 import multer from 'multer'
 import { WebSocketServer, WebSocket } from 'ws'
-import type { ServerMsg, LyricsDoc, SyncQuality, Genre, CategoryId } from '@kiosco/shared'
-import { detectFormat, GENRES } from '@kiosco/shared'
+import type { ServerMsg, LyricsDoc, SyncQuality, Genre, CategoryId, Singer } from '@kiosco/shared'
+import { detectFormat, GENRES, CATEGORIES } from '@kiosco/shared'
 import {
   searchSongs,
   getRandomSongs,
@@ -25,6 +25,9 @@ import {
   deleteSong,
   getBackgroundVideoUrl,
   setBackgroundVideo,
+  getCategoryImages,
+  setCategoryImage,
+  deleteCategoryImage,
   listQueue,
   listUnscored,
   addToQueue,
@@ -62,6 +65,9 @@ import {
 import { runAlignment } from './sync/align.js'
 import { transcodeToMp3 } from './sync/transcode.js'
 import { runColorTracking } from './sync/templateTracking.js'
+import { runTemplateFaceAnalysis } from './sync/faceSwapRender.js'
+import { resizeSquareImage } from './sync/resizeImage.js'
+import { getFaceSwapStatus, triggerFaceSwapRender } from './sync/faceSwapJobs.js'
 import { scanFolders, type ImportCandidate } from './import.js'
 import { listTemplates } from './templates.js'
 
@@ -181,6 +187,25 @@ app.get('/api/sessions/current', (_req, res) => {
   res.json({ session, singers: session ? listSessionSingers(session.id) : [] })
 })
 
+// Estado de los renders de swap por cantante+template `faceswap` — el
+// cliente pollea esto para saber qué hotkeys habilitar (ver
+// triggerFaceSwapRendersForSinger/triggerFaceSwapRendersForTemplate).
+app.get('/api/sessions/current/faceswap-status', (_req, res) => {
+  const session = getActiveSession()
+  if (!session) return res.json({})
+  const singers = listSessionSingers(session.id)
+  const templates = listTemplates(templatesDir).filter((t) => t.kind === 'faceswap')
+  const status: Record<string, Record<string, string>> = {}
+  for (const singer of singers) {
+    if (!singer.photoUrl) continue
+    status[singer.id] = {}
+    for (const t of templates) {
+      status[singer.id][t.id] = getFaceSwapStatus(faceSwapOutPath(session.id, singer.id, t.id), singer.id, t.id)
+    }
+  }
+  res.json(status)
+})
+
 // Si ya había una sesión activa, la termina (borra DB + fotos en disco)
 // antes de arrancar la nueva — mismo resultado que terminar-y-arrancar,
 // un click menos para el operador.
@@ -256,8 +281,67 @@ app.post('/api/singers', requireActiveSession, singerUpload.single('photo'), (re
     Number.isFinite(ovalCx) && Number.isFinite(ovalCy) && Number.isFinite(ovalScale)
       ? { cx: ovalCx, cy: ovalCy, scale: ovalScale }
       : null
-  res.json(createSinger(session.id, name, photoPath, oval))
+  const singer = createSinger(session.id, name, photoPath, oval)
+  res.json(singer)
+  triggerFaceSwapRendersForSinger(singer)
 })
+
+/** `Singer.photoUrl` sale de resolveMediaUrl() en queries.ts como
+ * `/library/<ruta>` — nunca es una foto externa (solo se sube por acá), así
+ * que alcanza con sacarle el prefijo para volver a la ruta real en disco. */
+function singerPhotoAbsPath(photoUrl: string): string {
+  return path.join(libraryDir, photoUrl.replace(/^\/library\//, ''))
+}
+
+function faceSwapOutPath(sessionId: string, singerId: string, templateId: string): string {
+  return path.join(libraryDir, SESSIONS_DIR, sessionId, 'faceswap', singerId, `${templateId}.mp4`)
+}
+
+/** Dispara (en segundo plano) el render de este cantante contra todos los
+ * templates `faceswap` que ya existen — se llama apenas se registra un
+ * cantante con foto, para que esté listo antes de que le toque cantar. */
+function triggerFaceSwapRendersForSinger(singer: Singer): void {
+  const session = getActiveSession()
+  if (!session || !singer.photoUrl) return
+  const photoPath = singerPhotoAbsPath(singer.photoUrl)
+  for (const t of listTemplates(templatesDir)) {
+    if (t.kind !== 'faceswap') continue
+    const dir = path.join(templatesDir, t.id)
+    const outPath = faceSwapOutPath(session.id, singer.id, t.id)
+    triggerFaceSwapRender(
+      singer.id,
+      t.id,
+      path.join(dir, 'video.mp4'),
+      path.join(dir, 'analysis.json'),
+      photoPath,
+      outPath,
+      path.dirname(outPath),
+    )
+  }
+}
+
+/** Contraparte: al subir un template `faceswap` nuevo a mitad de sesión, lo
+ * dispara contra todos los cantantes ya cargados con foto — así no hace
+ * falta re-registrar a nadie para que el template nuevo esté disponible. */
+function triggerFaceSwapRendersForTemplate(templateId: string): void {
+  const session = getActiveSession()
+  if (!session) return
+  const dir = path.join(templatesDir, templateId)
+  for (const singer of listSessionSingers(session.id)) {
+    if (!singer.photoUrl) continue
+    const photoPath = singerPhotoAbsPath(singer.photoUrl)
+    const outPath = faceSwapOutPath(session.id, singer.id, templateId)
+    triggerFaceSwapRender(
+      singer.id,
+      templateId,
+      path.join(dir, 'video.mp4'),
+      path.join(dir, 'analysis.json'),
+      photoPath,
+      outPath,
+      path.dirname(outPath),
+    )
+  }
+}
 
 // --- templates (animación de cara en el escenario, "Fun Box") -----------
 
@@ -280,23 +364,34 @@ const templateUpload = multer({
   }),
 })
 
-// Sube un video crudo y corre el tracking por color automáticamente (mismo
-// subproceso que ya se usaba a mano vía pipeline/track_color.py) — el
-// operador no toca la terminal ni /template-editor para esto.
+// Sube un video crudo y lo mapea automáticamente — el operador no toca la
+// terminal ni /template-editor para esto. `kind: 'sticker'` corre el
+// tracking por color (pipeline/track_color.py, unos segundos); `kind:
+// 'faceswap'` corre el análisis de cara real (pipeline/analyze_template_face.py,
+// más lento — recorre el video entero con un modelo de detección — pero no
+// está en el camino crítico de un show en vivo).
 app.post('/api/templates', templateUpload.single('video'), async (req, res) => {
   const id: string = res.locals.templateId
   const dir = path.join(templatesDir, id)
+  const kind = req.body.kind === 'faceswap' ? 'faceswap' : 'sticker'
   if (!req.file) {
     fs.rmSync(dir, { recursive: true, force: true })
     return res.status(400).json({ error: 'falta el archivo de video' })
   }
 
   const videoPath = path.join(dir, 'video.mp4')
-  const transformPath = path.join(dir, 'transform.json')
   try {
-    await runColorTracking(videoPath, transformPath)
-    const transform = JSON.parse(fs.readFileSync(transformPath, 'utf-8'))
-    res.json({ id, videoUrl: `/templates/${id}/video.mp4`, transform })
+    if (kind === 'faceswap') {
+      const analysisPath = path.join(dir, 'analysis.json')
+      await runTemplateFaceAnalysis(videoPath, analysisPath)
+      res.json({ id, videoUrl: `/templates/${id}/video.mp4`, kind })
+      triggerFaceSwapRendersForTemplate(id)
+    } else {
+      const transformPath = path.join(dir, 'transform.json')
+      await runColorTracking(videoPath, transformPath)
+      const transform = JSON.parse(fs.readFileSync(transformPath, 'utf-8'))
+      res.json({ id, videoUrl: `/templates/${id}/video.mp4`, kind, transform })
+    }
   } catch (err) {
     fs.rmSync(dir, { recursive: true, force: true })
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) })
@@ -735,6 +830,58 @@ app.post('/api/banners/reorder', express.json(), (req, res) => {
   if (!Array.isArray(ids)) return res.status(400).json({ error: 'ids debe ser un array' })
   setBannerOrder(ids as string[])
   res.json({ ok: true })
+})
+
+// --- portadas de categoría ---------------------------------------------
+// CATEGORIES (shared/domain.ts) es un conjunto fijo de 7 — una imagen cada
+// una, redimensionada a un cuadrado parejo (resizeSquareImage) para que se
+// vean consistentes sin importar tamaño/proporción del archivo original.
+
+const CATEGORY_IMAGES_DIR = '_categories'
+const categoryUploadTmpDir = path.join(libraryDir, CATEGORY_IMAGES_DIR, '_tmp')
+
+const categoryImageUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => {
+      fs.mkdirSync(categoryUploadTmpDir, { recursive: true })
+      cb(null, categoryUploadTmpDir)
+    },
+    filename: (_req, file, cb) => cb(null, `${crypto.randomUUID()}${path.extname(file.originalname) || '.png'}`),
+  }),
+})
+
+app.get('/api/settings/category-images', (_req, res) => {
+  res.json(getCategoryImages())
+})
+
+app.post('/api/settings/category-image/:categoryId', categoryImageUpload.single('image'), async (req, res) => {
+  const categoryId = req.params.categoryId as CategoryId
+  if (!CATEGORIES.some((c) => c.id === categoryId)) {
+    if (req.file) fs.rmSync(req.file.path, { force: true })
+    return res.status(400).json({ error: `categoría desconocida: ${categoryId}` })
+  }
+  if (!req.file) return res.status(400).json({ error: 'falta la imagen' })
+
+  const outDir = path.join(libraryDir, CATEGORY_IMAGES_DIR)
+  fs.mkdirSync(outDir, { recursive: true })
+  const outPath = path.join(outDir, `${categoryId}.png`)
+  try {
+    await resizeSquareImage(req.file.path, outPath)
+  } catch (err) {
+    return res.status(500).json({ error: err instanceof Error ? err.message : 'no se pudo procesar la imagen' })
+  } finally {
+    fs.rmSync(req.file.path, { force: true })
+  }
+  setCategoryImage(categoryId, `${CATEGORY_IMAGES_DIR}/${categoryId}.png`)
+  res.json({ ok: true, images: getCategoryImages() })
+})
+
+app.delete('/api/settings/category-image/:categoryId', (req, res) => {
+  const categoryId = req.params.categoryId as CategoryId
+  if (!CATEGORIES.some((c) => c.id === categoryId)) return res.status(400).json({ error: `categoría desconocida: ${categoryId}` })
+  deleteCategoryImage(categoryId)
+  fs.rmSync(path.join(libraryDir, CATEGORY_IMAGES_DIR, `${categoryId}.png`), { force: true })
+  res.json({ ok: true, images: getCategoryImages() })
 })
 
 // --- importar carpetas externas --------------------------------------------

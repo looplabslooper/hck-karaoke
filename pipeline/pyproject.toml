@@ -11,6 +11,19 @@ dependencies = [
     "demucs>=4.0.1",
     "opencv-python>=5.0.0.93",
     "mediapipe>=1.0.0",
+    "insightface>=0.7.3",
+    # Pineado a 1.22.0 (no ">=") a propósito: es la última serie que todavía
+    # pide sus dependencias CUDA como "nvidia-*-cu12" (ver extras [cuda,cudnn]
+    # abajo) — misma versión de CUDA que ya usa torch (cu124) arriba. Desde
+    # 1.23+ onnxruntime-gpu pasó a pedir CUDA 13 ("nvidia-*-cu13"), que a la
+    # fecha de escribir esto no tiene wheels de Windows para nvidia-cublas —
+    # no actualizar sin volver a chequear que exista esa wheel.
+    "onnxruntime-gpu[cuda,cudnn]==1.22.0",
+    # No viene incluido en los extras de onnxruntime-gpu de arriba (falta
+    # cublas ahí, solo trae cudnn/cufft/curand/nvrtc/runtime) pero inswapper
+    # lo necesita igual — ver pipeline/_cuda_dlls.py para el porqué hace
+    # falta este paquete Y un fix de PATH en tiempo de ejecución.
+    "nvidia-cublas-cu12",
 ]
 
 [tool.uv.sources]
