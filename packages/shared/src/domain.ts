@@ -26,6 +26,9 @@ export interface Song {
   /** Uno de `GENRES`, o null hasta que se etiquete a mano — ningún importador
    * trae género (ver .claude/plans, sección "Categorías"). */
   genre: Genre | null
+  /** Número visible para el operador — autoincremental, no editable, nunca
+   * se reasigna aunque se borre la canción (ver `nextSongNumber`, server). */
+  number: number
 }
 
 /** Taxonomía fija de géneros — no es texto libre, para que las categorías de
@@ -60,7 +63,7 @@ export interface QueueItem {
   status: QueueStatus
   /** null hasta que el operador la puntúa (después de que termina). */
   score: number | null
-  song: { id: string; title: string; artist: string }
+  song: { id: string; title: string; artist: string; number: number }
 }
 
 export interface LeaderboardEntry {
@@ -112,6 +115,8 @@ export type Template =
   | {
       id: string
       videoUrl: string
+      name: string
+      hotkey: number | null
       kind: 'sticker'
       transform: {
         fps: number
@@ -120,7 +125,7 @@ export type Template =
         frames: { t: number; cx: number | null; cy: number | null; angle: number | null; scale: number | null; visible: boolean }[]
       }
     }
-  | { id: string; videoUrl: string; kind: 'faceswap' }
+  | { id: string; videoUrl: string; name: string; hotkey: number | null; kind: 'faceswap' }
 
 /** Estado de render de un clip cantante+template `faceswap` (ver
  * GET /api/sessions/current/faceswap-status) — `ready` es el único estado en

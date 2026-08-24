@@ -12,9 +12,8 @@ import {
   searchSongs,
   getRandomSongs,
   getCategorySongs,
-  getHomeCategories,
-  setHomeCategories,
   getSongById,
+  getSongByNumber,
   getNowPlaying,
   setNowPlaying,
   clearNowPlaying,
@@ -61,7 +60,11 @@ import {
   createBanner,
   deleteBanner,
   setBannerOrder,
+  createTemplateMeta,
+  updateTemplateMeta,
+  deleteTemplateMeta,
 } from './db/queries.js'
+import type { SongSortColumn } from './db/queries.js'
 import { runAlignment } from './sync/align.js'
 import { transcodeToMp3 } from './sync/transcode.js'
 import { runColorTracking } from './sync/templateTracking.js'
@@ -109,17 +112,37 @@ app.get('/api/songs', (req, res) => {
   const quality =
     qualityParam && qualityParam !== 'todos' ? (qualityParam as SyncQuality) : undefined
   const sortDir = req.query.sort === 'desc' ? 'desc' : 'asc'
+  const sortByParam = typeof req.query.sortBy === 'string' ? req.query.sortBy : undefined
+  const sortBy = (['title', 'artist', 'genre', 'format', 'quality'] as const).includes(
+    sortByParam as SongSortColumn,
+  )
+    ? (sortByParam as SongSortColumn)
+    : undefined
   const limit = Math.min(Math.max(Number(req.query.limit) || 60, 1), 500)
   const offset = Math.max(Number(req.query.offset) || 0, 0)
   const verified =
     req.query.verified === 'true' ? true : req.query.verified === 'false' ? false : undefined
-  res.json(searchSongs({ q, quality, verified, sortDir, limit, offset }))
+  // Express da un array cuando el query param se repite (?genre=a&genre=b),
+  // y un string suelto si aparece una sola vez — normalizamos a array.
+  const genreRaw = req.query.genre
+  const genres = genreRaw === undefined ? undefined : (Array.isArray(genreRaw) ? genreRaw : [genreRaw]).map(String)
+  res.json(searchSongs({ q, quality, verified, genres, sortBy, sortDir, limit, offset }))
 })
 
 // Muestra al azar para la página de Inicio.
 app.get('/api/songs/random', (req, res) => {
   const limit = Math.min(Math.max(Number(req.query.limit) || 10, 1), 50)
   res.json(getRandomSongs(limit))
+})
+
+// Resuelve el N° visible de canción (ver REQ-16/18) a su id real, para el
+// alta rápida de la cola de espera sin tener que buscar por nombre.
+app.get('/api/songs/by-number/:n', (req, res) => {
+  const n = Number(req.params.n)
+  if (!Number.isInteger(n)) return res.status(400).json({ error: 'número inválido' })
+  const song = getSongByNumber(n)
+  if (!song) return res.status(404).json({ error: 'no existe ninguna canción con ese número' })
+  res.json(song)
 })
 
 // Marca/desmarca "escuché esta canción y la letra va sincronizada".
@@ -142,15 +165,6 @@ app.post('/api/songs/:id/genre', (req, res) => {
 app.get('/api/songs/category/:id', (req, res) => {
   const limit = Math.min(Math.max(Number(req.query.limit) || 15, 1), 50)
   res.json(getCategorySongs(req.params.id as CategoryId, limit))
-})
-
-app.get('/api/settings/home-categories', (_req, res) => res.json(getHomeCategories()))
-
-app.post('/api/settings/home-categories', (req, res) => {
-  const ids = req.body.ids as unknown
-  if (!Array.isArray(ids)) return res.status(400).json({ error: 'ids debe ser un array' })
-  setHomeCategories(ids as CategoryId[])
-  res.json({ ok: true })
 })
 
 app.delete('/api/songs/:id', (req, res) => {
@@ -379,18 +393,23 @@ app.post('/api/templates', templateUpload.single('video'), async (req, res) => {
     return res.status(400).json({ error: 'falta el archivo de video' })
   }
 
+  const rawName = typeof req.body.name === 'string' ? req.body.name.trim() : ''
+  const name = rawName || `Escena ${listTemplates(templatesDir).length + 1}`
+
   const videoPath = path.join(dir, 'video.mp4')
   try {
     if (kind === 'faceswap') {
       const analysisPath = path.join(dir, 'analysis.json')
       await runTemplateFaceAnalysis(videoPath, analysisPath)
-      res.json({ id, videoUrl: `/templates/${id}/video.mp4`, kind })
+      createTemplateMeta(id, name)
+      res.json({ id, videoUrl: `/templates/${id}/video.mp4`, kind, name, hotkey: null })
       triggerFaceSwapRendersForTemplate(id)
     } else {
       const transformPath = path.join(dir, 'transform.json')
       await runColorTracking(videoPath, transformPath)
       const transform = JSON.parse(fs.readFileSync(transformPath, 'utf-8'))
-      res.json({ id, videoUrl: `/templates/${id}/video.mp4`, kind, transform })
+      createTemplateMeta(id, name)
+      res.json({ id, videoUrl: `/templates/${id}/video.mp4`, kind, transform, name, hotkey: null })
     }
   } catch (err) {
     fs.rmSync(dir, { recursive: true, force: true })
@@ -398,10 +417,28 @@ app.post('/api/templates', templateUpload.single('video'), async (req, res) => {
   }
 })
 
+// Nombre y/o hotkey (1-9, o null para desasignar) — ver updateTemplateMeta
+// en db/queries.ts para el swap implícito si el número ya estaba tomado.
+app.patch('/api/templates/:id', (req, res) => {
+  const dir = path.join(templatesDir, req.params.id)
+  if (!fs.existsSync(dir)) return res.status(404).json({ error: 'template not found' })
+
+  const patch: { name?: string; hotkey?: number | null } = {}
+  if (typeof req.body.name === 'string' && req.body.name.trim()) patch.name = req.body.name.trim()
+  if (req.body.hotkey === null) patch.hotkey = null
+  else if (typeof req.body.hotkey === 'number' && Number.isInteger(req.body.hotkey) && req.body.hotkey >= 1 && req.body.hotkey <= 9) {
+    patch.hotkey = req.body.hotkey
+  }
+
+  updateTemplateMeta(req.params.id, patch)
+  res.json({ ok: true })
+})
+
 app.delete('/api/templates/:id', (req, res) => {
   const dir = path.join(templatesDir, req.params.id)
   if (!fs.existsSync(dir)) return res.status(404).json({ error: 'template not found' })
   fs.rmSync(dir, { recursive: true, force: true })
+  deleteTemplateMeta(req.params.id)
   res.json({ ok: true })
 })
 

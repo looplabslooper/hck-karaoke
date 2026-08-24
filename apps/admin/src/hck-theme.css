@@ -1,0 +1,268 @@
+/* ══════════════════════════════════════════════════════════════════════
+   HCK — sistema de diseño del refactor visual final del kiosco.
+   Portado 1:1 desde el proyecto de diseño ("High Class Karaoke Redesign",
+   kiosk/hck.css) — ver el plan en curso. Coincide con design-style-a.md
+   (fondo casi negro, único acento violeta eléctrico, Plus Jakarta Sans).
+
+   Todo acá adentro va prefijado `hck-` (variables Y clases) A PROPÓSITO:
+   convive con el style.css viejo sin pisar ni una sola clase ni redefinir
+   ningún elemento global todavía — así esta hoja se puede sumar entera de
+   una sin cambiar nada de lo que ya se ve hoy. Las reglas que en el
+   original tocaban elementos sueltos (body, h1-h4, p, botones, etc., que
+   si quedaran sueltas cambiarían la app entera al instante) quedan acá
+   escopeadas bajo `.hck-scope` — no se activan hasta que un componente
+   real envuelva su árbol en esa clase (Fase 2 del refactor: el cascarón
+   persistente).
+   ══════════════════════════════════════════════════════════════════ */
+
+:root{
+  --hck-bg:        #0F1115;
+  --hck-bg-deep:   #0A0C10;
+  --hck-surface:   #171A21;
+  --hck-surface-2: #1E222B;
+  --hck-surface-3: #262B36;
+  --hck-text:      #F5F5F7;
+  --hck-muted:     rgba(245,245,247,.60);
+  --hck-faint:     rgba(245,245,247,.58);
+  /* Sólo para adorno que no se lee (números de orden, marcas de fondo):
+     por debajo de 4.5:1 contra el fondo, nunca para información. */
+  --hck-deco:      rgba(245,245,247,.34);
+  --hck-line:      rgba(245,245,247,.10);
+  --hck-line-2:    rgba(245,245,247,.18);
+  --hck-accent:    #8B5CF6;
+  --hck-accent-lt: #A78BFA;
+  --hck-accent-dk: #4C1D95;
+  --hck-accent-06: rgba(139,92,246,.06);
+  --hck-accent-12: rgba(139,92,246,.12);
+  --hck-accent-22: rgba(139,92,246,.22);
+  --hck-glow:      0 0 28px rgba(139,92,246,.45);
+  --hck-glow-lg:   0 0 70px rgba(139,92,246,.38);
+  --hck-r-sm: 8px; --hck-r-md: 14px; --hck-r-lg: 20px; --hck-r-xl: 28px;
+  --hck-font: "Plus Jakarta Sans", system-ui, sans-serif;
+}
+
+.hck-scope,
+.hck-scope *,
+.hck-scope *::before,
+.hck-scope *::after{ box-sizing:border-box }
+.hck-scope{
+  background:var(--hck-bg); color:var(--hck-text);
+  font-family:var(--hck-font); font-size:17px; line-height:1.5;
+  font-weight:450; letter-spacing:-.005em;
+  -webkit-font-smoothing:antialiased;
+}
+.hck-scope h1,.hck-scope h2,.hck-scope h3,.hck-scope h4{ margin:0; font-weight:700; letter-spacing:-.03em; line-height:1.04 }
+.hck-scope h1{ font-size:clamp(38px,4vw,68px) }
+.hck-scope h2{ font-size:clamp(28px,2.7vw,46px) }
+.hck-scope h3{ font-size:clamp(21px,1.8vw,32px) }
+.hck-scope h4{ font-size:clamp(17px,1.35vw,23px); letter-spacing:-.02em }
+.hck-scope p{ margin:0 }
+.hck-scope button,.hck-scope input,.hck-scope textarea,.hck-scope select{ font:inherit; color:inherit }
+.hck-scope img{ display:block; max-width:100% }
+.hck-scope a{ color:var(--hck-accent-lt); text-decoration:none }
+.hck-scope a:hover{ color:var(--hck-text) }
+.hck-scope ::selection{ background:var(--hck-accent-22) }
+
+/* El kiosco se opera con teclado: el anillo de foco es parte del diseño,
+   no un accesorio — grueso y violeta para verlo desde tres metros. */
+.hck-scope :focus{ outline:none }
+.hck-scope :focus-visible{ outline:3px solid var(--hck-accent); outline-offset:3px; border-radius:var(--hck-r-sm) }
+
+.hck-mono{ font-family:ui-monospace,"SF Mono",Menlo,monospace; font-variant-numeric:tabular-nums }
+.hck-muted{ color:var(--hck-muted) }
+.hck-faint{ color:var(--hck-faint) }
+.hck-deco{ color:var(--hck-deco) }
+.hck-kicker{ font-size:12.5px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; color:var(--hck-accent-lt) }
+.hck-num{ font-variant-numeric:tabular-nums }
+
+/* — scroll — */
+.hck-scope ::-webkit-scrollbar{ width:12px; height:12px }
+.hck-scope ::-webkit-scrollbar-thumb{ background:var(--hck-surface-3); border-radius:99px; border:3px solid var(--hck-bg) }
+.hck-scope ::-webkit-scrollbar-track{ background:transparent }
+
+/* ── botones ─────────────────────────────────────────────────────── */
+.hck-btn{
+  display:inline-flex; align-items:center; justify-content:center; gap:9px;
+  padding:13px 20px; border-radius:var(--hck-r-md); border:1.5px solid transparent;
+  background:transparent; font-weight:600; font-size:16px; letter-spacing:-.01em;
+  cursor:pointer; white-space:nowrap; transition:background .14s, border-color .14s, transform .1s;
+}
+.hck-btn:disabled{ opacity:.35; cursor:not-allowed }
+.hck-btn:active:not(:disabled){ transform:translateY(1px) }
+.hck-btn-primary{ background:var(--hck-accent); color:#fff; box-shadow:var(--hck-glow) }
+.hck-btn-primary:hover{ background:var(--hck-accent-lt) }
+.hck-btn-secondary{ border-color:var(--hck-line-2); color:var(--hck-text) }
+.hck-btn-secondary:hover{ background:rgba(245,245,247,.06); border-color:var(--hck-line-2) }
+.hck-btn-ghost{ color:var(--hck-muted); padding-inline:10px }
+.hck-btn-ghost:hover{ color:var(--hck-text); background:rgba(245,245,247,.05) }
+.hck-btn-danger{ border-color:rgba(248,113,113,.5); color:#FCA5A5 }
+.hck-btn-danger:hover{ background:rgba(248,113,113,.12); border-color:#F87171 }
+.hck-btn-icon{ width:46px; height:46px; padding:0; border-color:var(--hck-line-2) }
+.hck-btn-icon.hck-btn-ghost{ border-color:transparent }
+.hck-btn-icon:hover{ background:rgba(245,245,247,.06) }
+.hck-btn-on{ color:var(--hck-accent-lt); border-color:var(--hck-accent); background:var(--hck-accent-12) }
+.hck-btn-lg{ padding:17px 28px; font-size:18px }
+.hck-btn-xl{ padding:22px 34px; font-size:21px; border-radius:var(--hck-r-lg) }
+.hck-btn-block{ width:100% }
+
+/* — tecla — */
+.hck-kbd{
+  display:inline-flex; align-items:center; justify-content:center; min-width:28px; height:28px;
+  padding:0 8px; border-radius:7px; background:var(--hck-surface-3); border:1px solid var(--hck-line-2);
+  border-bottom-width:3px; font-size:13.5px; font-weight:700;
+  font-family:ui-monospace,Menlo,monospace; color:var(--hck-text);
+}
+.hck-kbd-accent{ background:var(--hck-accent-dk); border-color:var(--hck-accent); color:#fff }
+.hck-kbd-lg{ min-width:46px; height:46px; font-size:19px; border-radius:11px }
+
+/* ── superficies ─────────────────────────────────────────────────── */
+.hck-card{
+  background:var(--hck-surface); border:1px solid var(--hck-line); border-radius:var(--hck-r-lg);
+  padding:clamp(16px,1.3vw,24px); display:flex; flex-direction:column; gap:10px;
+}
+.hck-card-hi{ border-color:var(--hck-accent); background:linear-gradient(180deg,var(--hck-accent-12),transparent 70%),var(--hck-surface) }
+.hck-pressable{ cursor:pointer; transition:border-color .14s, transform .14s, background .14s }
+.hck-pressable:hover{ border-color:var(--hck-line-2); transform:translateY(-2px) }
+.hck-pressable:focus-visible{ transform:translateY(-2px) }
+
+.hck-tag{
+  display:inline-flex; align-items:center; gap:6px; padding:5px 12px; border-radius:99px;
+  font-size:13px; font-weight:600; background:var(--hck-surface-3); color:var(--hck-muted);
+}
+.hck-tag-accent{ background:var(--hck-accent-dk); color:#EDE9FE }
+.hck-tag-outline{ background:transparent; border:1px solid var(--hck-line-2) }
+.hck-tag-live{ background:var(--hck-accent); color:#fff; box-shadow:var(--hck-glow) }
+
+.hck-field label{ display:block; font-size:14px; font-weight:600; color:var(--hck-muted); margin-bottom:8px }
+.hck-input{
+  width:100%; min-height:54px; padding:14px 16px; border-radius:var(--hck-r-md);
+  background:var(--hck-surface); border:1.5px solid var(--hck-line-2); color:var(--hck-text);
+  font-size:17px; caret-color:var(--hck-accent);
+}
+.hck-input::placeholder{ color:var(--hck-faint) }
+.hck-input:focus-visible{ border-color:var(--hck-accent); outline-offset:0 }
+textarea.hck-input{ min-height:240px; line-height:1.75; resize:vertical }
+
+.hck-chips{ display:flex; flex-wrap:wrap; gap:10px }
+.hck-chip{
+  display:inline-flex; align-items:center; gap:8px; padding:11px 18px; border-radius:99px;
+  border:1.5px solid var(--hck-line-2); background:transparent; font-size:15.5px; font-weight:600;
+  cursor:pointer; color:var(--hck-muted);
+}
+.hck-chip:hover{ color:var(--hck-text); background:rgba(245,245,247,.05) }
+.hck-chip-on{ background:var(--hck-accent); border-color:var(--hck-accent); color:#fff; box-shadow:var(--hck-glow) }
+
+.hck-table{ width:100%; border-collapse:collapse; font-size:16.5px }
+.hck-table th{
+  text-align:left; padding:10px 14px; font-size:12.5px; font-weight:700;
+  letter-spacing:.12em; text-transform:uppercase; color:var(--hck-faint);
+  border-bottom:1px solid var(--hck-line);
+}
+.hck-table td{ padding:14px; border-bottom:1px solid var(--hck-line) }
+.hck-table tbody tr:hover{ background:rgba(245,245,247,.03) }
+.hck-table tbody tr:focus-visible{ outline-offset:-3px }
+
+.hck-dialog-back{
+  position:fixed; inset:0; z-index:80; display:grid; place-items:center; padding:32px;
+  background:rgba(10,12,16,.78); backdrop-filter:blur(10px);
+  animation:hck-fade .18s ease-out both;
+}
+.hck-dialog{
+  width:min(620px,100%); background:var(--hck-surface); border:1px solid var(--hck-line-2);
+  border-radius:var(--hck-r-xl); padding:32px; display:flex; flex-direction:column; gap:18px;
+  box-shadow:0 40px 90px rgba(0,0,0,.7), var(--hck-glow-lg);
+  animation:hck-pop .22s cubic-bezier(.2,.9,.3,1.2) both;
+}
+
+/* ── ilustración de marca ────────────────────────────────────────── */
+/* Los PNG/WEBP vienen con alfa real: el objeto negro con rim-light violeta
+   cae directo sobre el fondo. El halo va detrás, nunca como filtro. */
+.hck-art{ position:relative; display:grid; place-items:center; overflow:hidden }
+.hck-art::before{
+  content:""; position:absolute; width:82%; aspect-ratio:1; border-radius:50%;
+  background:radial-gradient(circle, rgba(139,92,246,.42), transparent 68%);
+  filter:blur(28px);
+}
+.hck-art img{ position:relative; width:78%; height:78%; object-fit:contain }
+.hck-art-tilt img{ transition:transform .3s ease }
+.hck-pressable:hover .hck-art-tilt img,
+.hck-pressable:focus-visible .hck-art-tilt img{ transform:scale(1.06) rotate(-2deg) }
+
+/* ── luces y movimiento ──────────────────────────────────────────── */
+@keyframes hck-fade{ from{opacity:0} to{opacity:1} }
+@keyframes hck-pop{ from{opacity:0; transform:scale(.94) translateY(10px)} to{opacity:1; transform:none} }
+@keyframes hck-in{ from{opacity:0; transform:translateY(14px)} to{opacity:1; transform:none} }
+@keyframes hck-sweep{ 0%{transform:translateX(-140%)} 100%{transform:translateX(560%)} }
+@keyframes hck-beam{
+  0%{ transform:rotate(var(--a)) scaleY(.94); opacity:.16 }
+  50%{ opacity:.46 }
+  100%{ transform:rotate(calc(var(--a) + 15deg)) scaleY(1.1); opacity:.16 }
+}
+@keyframes hck-pulse{ 0%,100%{ transform:scale(1); opacity:.55 } 50%{ transform:scale(1.4); opacity:1 } }
+@keyframes hck-float{ 0%,100%{ transform:translateY(0) } 50%{ transform:translateY(-9px) } }
+@keyframes hck-ring{ 0%{ transform:scale(.5); opacity:.7 } 100%{ transform:scale(2.1); opacity:0 } }
+@keyframes hck-spin{ to{ transform:rotate(360deg) } }
+@keyframes hck-marquee{ 0%{ background-position:0 0 } 100%{ background-position:60px 0 } }
+
+.hck-enter{ animation:hck-in .34s ease-out both }
+.hck-stage{ position:relative; overflow:hidden; isolation:isolate }
+.hck-stage > *{ position:relative; z-index:2 }
+
+/* Cañones de luz: el fondo vivo de todo lo que "está pasando ahora". */
+.hck-beams{ position:absolute; inset:-50% -14%; z-index:0; pointer-events:none }
+.hck-beams i{
+  position:absolute; top:0; width:clamp(80px,11vw,200px); height:100%;
+  transform-origin:50% 0; filter:blur(30px); mix-blend-mode:screen;
+  background:linear-gradient(to bottom, rgba(139,92,246,.75), rgba(139,92,246,0) 74%);
+  animation:hck-beam 7s ease-in-out infinite alternate;
+}
+.hck-sweep{ position:absolute; inset:0; z-index:3; pointer-events:none; overflow:hidden; border-radius:inherit }
+.hck-sweep i{
+  position:absolute; top:0; bottom:0; width:16%;
+  background:linear-gradient(90deg,transparent,rgba(167,139,250,.30),transparent);
+  animation:hck-sweep 3.1s linear infinite;
+}
+
+/* Barra de carga: no es una barra, es un ecualizador de luces.
+   Las barras encendidas las pinta el JS/React; el CSS sólo define la pista. */
+.hck-eq{ display:flex; align-items:flex-end; gap:clamp(3px,.4vw,7px); height:clamp(110px,14vw,200px) }
+.hck-eq b{
+  flex:1; height:9%; border-radius:4px; background:var(--hck-surface-3);
+  transition:height .16s ease-out, background .3s, box-shadow .3s;
+}
+.hck-eq b.on{
+  background:linear-gradient(to top,var(--hck-accent-dk),var(--hck-accent-lt));
+}
+.hck-eq b.hot{ box-shadow:var(--hck-glow) }
+
+/* Indicador global de trabajos: "hay algo cargando" sin explicar qué. */
+.hck-jobbar{
+  position:relative; height:5px; border-radius:99px; overflow:hidden; background:var(--hck-surface-3);
+}
+.hck-jobbar i{ position:absolute; inset:0; border-radius:99px; background:linear-gradient(90deg,var(--hck-accent-dk),var(--hck-accent-lt)); box-shadow:var(--hck-glow) }
+.hck-jobbar-idle i{
+  width:38%; background:linear-gradient(90deg,transparent,var(--hck-accent),transparent);
+  animation:hck-sweep 1.9s ease-in-out infinite;
+}
+.hck-spinner{
+  width:20px; height:20px; border-radius:50%; flex:none;
+  border:2.5px solid var(--hck-accent-22); border-top-color:var(--hck-accent);
+  animation:hck-spin .8s linear infinite;
+}
+
+.hck-dropzone{
+  position:relative; overflow:hidden; cursor:pointer; text-align:center;
+  min-height:clamp(230px,27vh,360px); border-radius:var(--hck-r-xl);
+  border:2px dashed var(--hck-line-2); background:var(--hck-surface);
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:16px;
+}
+.hck-dropzone:hover, .hck-dropzone:focus-visible{ border-color:var(--hck-accent) }
+.hck-dropzone .hck-ico{ animation:hck-float 3.8s ease-in-out infinite; color:var(--hck-accent-lt) }
+
+/* ── pantalla del público ───────────────────────────────────────── */
+.hck-publico{ position:absolute; inset:0; background:var(--hck-bg-deep); overflow:hidden }
+.hck-lyric-now{
+  font-weight:800; letter-spacing:-.03em; line-height:1.06;
+  color:#fff; text-shadow:0 0 46px rgba(139,92,246,.75), 0 6px 40px rgba(0,0,0,.8);
+}
+.hck-lyric-next{ font-weight:600; color:rgba(245,245,247,.42); letter-spacing:-.02em; line-height:1.15 }

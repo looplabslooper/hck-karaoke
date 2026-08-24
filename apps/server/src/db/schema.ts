@@ -26,6 +26,12 @@ export const songs = sqliteTable('songs', {
   /** Uno de shared/domain.ts `GENRES`, puesto a mano por el operador — ningún
    * importador trae género (ver plan de rediseño); null hasta que se etiquete. */
   genre: text('genre'),
+  /** Número visible para el operador — autoincremental, nunca se reasigna
+   * aunque se borre la canción (ver `nextSongNumber` en queries.ts: vive en
+   * `settings`, no se deriva de `max(number)` de las filas existentes).
+   * Nullable en el schema solo porque las canciones cargadas antes de este
+   * campo no tenían uno — `backfill-song-numbers.ts` las numera una vez. */
+  number: integer('number'),
   createdAt: integer('created_at').notNull(),
 })
 
@@ -113,5 +119,19 @@ export const banners = sqliteTable('banners', {
   id: text('id').primaryKey(),
   imagePath: text('image_path').notNull(), // relativo a library/_banners/
   position: integer('position').notNull(),
+  createdAt: integer('created_at').notNull(),
+})
+
+/**
+ * Metadata editable de un template de "cara en el escenario" (Fun Box). El
+ * video y su mapeo (`transform.json`/`analysis.json`) viven en
+ * `templatesDir/<id>/` — ver templates.ts, puro filesystem. Acá solo lo que
+ * el operador edita a mano: el nombre y el slot de hotkey 1-9 fijo (`null` =
+ * sin asignar) que lo dispara en pantalla completa.
+ */
+export const templateMeta = sqliteTable('template_meta', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  hotkey: integer('hotkey'),
   createdAt: integer('created_at').notNull(),
 })

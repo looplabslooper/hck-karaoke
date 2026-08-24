@@ -179,12 +179,13 @@ export function SingerPicker({
   const isExistingSinger = value.singerId !== null
 
   return (
-    <div className="singer-picker">
-      <div className="field">
+    <div className="hck-scope" style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
+      <div className="hck-field">
         <label>¿Quién canta?</label>
-        <div className="singer-picker-input-wrap">
+        <div style={{ position: 'relative' }}>
           <input
             type="text"
+            className="hck-input"
             autoFocus={autoFocus}
             value={value.name}
             placeholder={allowBlank ? 'Dejalo vacío para asignar después' : 'Nombre del invitado'}
@@ -194,25 +195,68 @@ export function SingerPicker({
             onKeyDown={(e) => e.key === 'Enter' && onEnter?.()}
           />
           {!hideSuggestions && showSuggestions && suggestions.length > 0 && (
-            <ul className="singer-suggestions">
+            <ul
+              style={{
+                listStyle: 'none',
+                margin: '6px 0 0',
+                padding: '8px',
+                position: 'absolute',
+                top: '100%',
+                left: 0,
+                right: 0,
+                zIndex: 20,
+                background: 'var(--hck-surface-2)',
+                border: '1px solid var(--hck-line-2)',
+                borderRadius: 'var(--hck-r-md)',
+                boxShadow: '0 20px 50px rgba(0,0,0,.5)',
+                maxHeight: '220px',
+                overflowY: 'auto',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '2px',
+              }}
+            >
               {suggestions.map((s) => (
-                <li key={s.id} onMouseDown={() => pickExisting(s)}>
-                  {s.photoUrl ? <img src={s.photoUrl} alt="" /> : <span className="singer-suggestion-noPhoto" />}
+                <li
+                  key={s.id}
+                  onMouseDown={() => pickExisting(s)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    padding: '9px 10px',
+                    borderRadius: 'var(--hck-r-sm)',
+                    cursor: 'pointer',
+                    fontSize: '15.5px',
+                    fontWeight: 600,
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(245,245,247,.06)')}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                >
+                  {s.photoUrl ? (
+                    <img src={s.photoUrl} alt="" style={{ width: '30px', height: '30px', borderRadius: '50%', objectFit: 'cover' }} />
+                  ) : (
+                    <span style={{ width: '30px', height: '30px', borderRadius: '50%', background: 'var(--hck-surface-3)', flex: 'none' }} />
+                  )}
                   {s.name}
                 </li>
               ))}
             </ul>
           )}
         </div>
-        {allowBlank && <p className="hint">Si lo dejás vacío queda como "Sin asignar" y lo asignás después.</p>}
+        {allowBlank && (
+          <p className="hck-faint" style={{ fontSize: '14px', marginTop: '8px' }}>
+            Si lo dejás vacío queda como "Sin asignar" y lo asignás después.
+          </p>
+        )}
       </div>
 
       {!isExistingSinger && value.name.trim() && (
-        <div className="field singer-photo-field">
+        <div className="hck-field">
           <label>Foto (opcional)</label>
           {calibrating ? (
-            <div className="oval-calib">
-              <p className="hint">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              <p className="hck-faint" style={{ fontSize: '14.5px' }}>
                 Arrastrá el óvalo para ponerlo sobre la cara, y las manijas de las esquinas para agrandarlo o
                 achicarlo.
               </p>
@@ -224,49 +268,63 @@ export function SingerPicker({
                   previewTemplate={previewTemplate}
                 />
               ) : (
-                <p className="hint">Cargando la foto…</p>
+                <p className="hck-faint" style={{ fontSize: '14.5px' }}>
+                  Cargando la foto…
+                </p>
               )}
-              <div className="step-actions">
-                <button type="button" className="btn-secondary" onClick={cancelCalibration}>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                <button type="button" className="hck-btn hck-btn-secondary" onClick={cancelCalibration}>
                   Cancelar
                 </button>
-                <button type="button" className="btn-primary" disabled={!calibImg} onClick={confirmCalibration}>
+                <button type="button" className="hck-btn hck-btn-primary" disabled={!calibImg} onClick={confirmCalibration}>
                   Confirmar óvalo
                 </button>
               </div>
             </div>
           ) : photoPreviewUrl ? (
-            <div className="singer-photo-preview">
-              <img src={photoPreviewUrl} alt="Foto capturada" />
-              <button type="button" className="btn-secondary" onClick={openCalibrationToAdjust}>
-                Ajustar óvalo
-              </button>
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => onChange({ ...value, photo: null, oval: null })}
-              >
-                Sacar de nuevo
-              </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+              <img
+                src={photoPreviewUrl}
+                alt="Foto capturada"
+                style={{ width: '84px', height: '84px', borderRadius: 'var(--hck-r-md)', objectFit: 'cover', border: '1px solid var(--hck-line-2)' }}
+              />
+              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                <button type="button" className="hck-btn hck-btn-secondary" onClick={openCalibrationToAdjust}>
+                  Ajustar óvalo
+                </button>
+                <button
+                  type="button"
+                  className="hck-btn hck-btn-secondary"
+                  onClick={() => onChange({ ...value, photo: null, oval: null })}
+                >
+                  Sacar de nuevo
+                </button>
+              </div>
             </div>
           ) : cameraOpen ? (
-            <div className="singer-camera">
-              <video ref={videoRef} autoPlay playsInline muted />
-              <div className="singer-camera-actions">
-                <button type="button" className="btn-primary" onClick={capturePhoto}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                muted
+                style={{ width: '100%', borderRadius: 'var(--hck-r-lg)', border: '1px solid var(--hck-line-2)' }}
+              />
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <button type="button" className="hck-btn hck-btn-primary" onClick={capturePhoto}>
                   Capturar
                 </button>
-                <button type="button" className="btn-secondary" onClick={stopCamera}>
+                <button type="button" className="hck-btn hck-btn-secondary" onClick={stopCamera}>
                   Cancelar
                 </button>
               </div>
             </div>
           ) : (
-            <div className="singer-photo-actions">
-              <button type="button" className="btn-secondary" onClick={openCamera}>
+            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+              <button type="button" className="hck-btn hck-btn-secondary" onClick={openCamera}>
                 Usar cámara
               </button>
-              <button type="button" className="btn-secondary" onClick={() => fileInputRef.current?.click()}>
+              <button type="button" className="hck-btn hck-btn-secondary" onClick={() => fileInputRef.current?.click()}>
                 Subir foto
               </button>
               <input

@@ -47,6 +47,15 @@ pipeline/test-*.txt
 pipeline/models/
 pipeline/__pycache__/
 
+# exports del design tool (Claude Design) y assets de referencia sueltos —
+# insumo para construir pantallas, no se versionan (ver design-style-a.md
+# para lo que sí es referencia durable).
+/High Class Karaoke Redesign/
+/High Class Karaoke Redesign.zip
+/library/version 3 w feat/
+/Prompt_texto_principal_ (1).mp4
+/Starting_from_this_exact_frame (1).mp4
+
 # editores / sistema
 .DS_Store
 Thumbs.db

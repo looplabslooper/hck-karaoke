@@ -31,13 +31,14 @@ const PATHS: Record<string, string> = {
   gear: 'M12 8.8a3.2 3.2 0 1 0 0 6.4 3.2 3.2 0 0 0 0-6.4z M12 3v2.4M12 18.6V21M3 12h2.4M18.6 12H21M6 6l1.7 1.7M16.3 16.3 18 18M18 6l-1.7 1.7M7.7 16.3 6 18',
   check: 'M5 12.5 9.5 17 19 7',
   camera: 'M4 8h3l1.5-2h7L17 8h3v11H4z M12 16a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4z',
+  bolt: 'M13 2 4 14h6l-1 8 9-12h-6z',
 }
 
 export type IconName = keyof typeof PATHS
 
-export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
+export function Icon({ name, size = 18, w = 1.8 }: { name: IconName; size?: number; w?: number }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={w} strokeLinecap="round" strokeLinejoin="round">
       <path d={PATHS[name]} />
     </svg>
   )

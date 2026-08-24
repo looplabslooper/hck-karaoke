@@ -135,32 +135,32 @@ h6 {
   letter-spacing: 0.08em;
 }
 
-.app {
+/* Antes era CSS Grid (250px 1fr) con Rail/Marquee anidados adentro — ahora
+   Rail.tsx y el <main> son flex siblings normales, y los dos se sacan del
+   árbol por completo en modo kiosco vía React (no CSS) — ver App.tsx. Esto
+   reemplazó un bug real: la regla vieja `.app.kiosk-mode .sidebar` dependía
+   de un nombre de clase que Rail.tsx ya no tiene, así que el rail había
+   dejado de ocultarse en pantalla completa sin que nadie lo notara. */
+.hck-app {
   position: relative;
   z-index: 1;
-  display: grid;
-  grid-template-columns: 250px 1fr;
+  display: flex;
   min-height: 100vh;
-  padding-bottom: 84px; /* deja lugar a la barra del reproductor fija */
-}
-
-/* Modo kiosco/pantalla completa: se oculta la navegación y queda solo la
-   letra + fondo, con la barra de controles siempre encima. */
-.app.kiosk-mode {
-  grid-template-columns: 1fr;
-  padding-bottom: 0;
-}
-
-.app.kiosk-mode .sidebar,
-.app.kiosk-mode .stage {
-  display: none;
 }
 
 .performance {
   position: relative;
+  /* `.hck-app` es flex; sin este width explícito, `.performance` (único
+     hijo cuando kioskMode oculta Rail/main) se achica al ancho de su
+     contenido en vez de ocupar la fila — el fondo absoluto quedaba
+     recortado a esa caja angosta en vez de cubrir toda la pantalla. */
+  width: 100%;
   height: 100vh;
   padding: 2rem;
-  padding-bottom: 84px;
+  /* Deja lugar a la marquesina fija (Marquee.tsx, siempre montada incluso en
+     modo kiosco) — tiene una fila más que la barra vieja (controles +
+     leyenda de teclas), por eso es más alta que los 84px de antes. */
+  padding-bottom: 140px;
   display: flex;
   align-items: center;
   justify-content: center;

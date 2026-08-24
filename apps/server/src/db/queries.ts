@@ -1,5 +1,5 @@
 import crypto from 'node:crypto'
-import { eq, and, asc, desc, sql } from 'drizzle-orm'
+import { eq, and, or, asc, desc, sql, type SQL } from 'drizzle-orm'
 import { CATEGORIES } from '@kiosco/shared'
 import type {
   Song,
@@ -19,7 +19,7 @@ import type {
   Banner,
 } from '@kiosco/shared'
 import { db } from './client.js'
-import { songs, settings, queueItems, playlists, playlistSongs, sessions, singers, banners } from './schema.js'
+import { songs, settings, queueItems, playlists, playlistSongs, sessions, singers, banners, templateMeta } from './schema.js'
 
 /** Prefijo que distingue un path "importado en el lugar" (carpeta externa del
  * usuario, nunca copiado a library/) de uno normal relativo a library/. Ver
@@ -51,6 +51,7 @@ function toWireSong(row: typeof songs.$inferSelect): Song {
     instrumentalUrl: row.instrumentalPath ? `/library/${row.instrumentalPath}` : null,
     syncVerified: row.syncVerified === 1,
     genre: (row.genre as Genre | null) ?? null,
+    number: row.number ?? 0,
   }
 }
 
@@ -86,11 +87,29 @@ export function getCategorySongs(categoryId: CategoryId, limit: number): { items
   return { items: rows.map(toWireSong), total }
 }
 
+export type SongSortColumn = 'title' | 'artist' | 'genre' | 'format' | 'quality'
+
+const SONG_SORT_EXPR: Record<SongSortColumn, SQL> = {
+  title: sql`${songs.title} COLLATE NOCASE`,
+  artist: sql`${songs.artist} COLLATE NOCASE`,
+  genre: sql`${songs.genre} COLLATE NOCASE`,
+  format: sql`${songs.sourceFormat} COLLATE NOCASE`,
+  quality: sql`${songs.syncQuality} COLLATE NOCASE`,
+}
+
 export interface SongSearchParams {
   q?: string
   quality?: SyncQuality
   /** true = solo verificadas a mano, false = solo las que faltan verificar. */
   verified?: boolean
+  /** Selección múltiple — OR entre géneros elegidos, AND con el resto de
+   * condiciones (ver REQ-11: "cumbia" o "rock" también trae baladas si el
+   * usuario tildó ambos géneros, pero nunca cruza con quality/verified). */
+  genres?: string[]
+  /** Columna de la tabla de Biblioteca por la que se ordena — por defecto
+   * título. Género/formato/calidad ordenan alfabéticamente por su valor
+   * interno, no hay un orden "natural" distinto que justifique más lógica. */
+  sortBy?: SongSortColumn
   sortDir?: 'asc' | 'desc'
   limit?: number
   offset?: number
@@ -102,17 +121,27 @@ export interface SongSearchParams {
  * miles de filas en cada render, incluido el tick de posición cada 200ms).
  * Filtra y ordena en SQLite, nunca carga más de `limit` filas en memoria. */
 export function searchSongs(params: SongSearchParams): { items: Song[]; total: number } {
-  const { q, quality, verified, sortDir = 'asc', limit = 60, offset = 0 } = params
+  const { q, quality, verified, genres, sortBy = 'title', sortDir = 'asc', limit = 60, offset = 0 } = params
   const conditions = []
   if (q && q.trim()) {
-    const like = `%${q.trim()}%`
-    conditions.push(sql`(${songs.title} LIKE ${like} OR ${songs.artist} LIKE ${like})`)
+    const trimmed = q.trim()
+    const like = `%${trimmed}%`
+    // Buscar "42" encuentra tanto el N° de canción exacto como cualquier
+    // título/artista que contenga ese texto — no hace falta un modo de
+    // búsqueda aparte para ID, es un OR más en la misma condición.
+    const asNumber = /^\d+$/.test(trimmed) ? Number(trimmed) : null
+    conditions.push(
+      asNumber !== null
+        ? sql`(${songs.title} LIKE ${like} OR ${songs.artist} LIKE ${like} OR ${songs.number} = ${asNumber})`
+        : sql`(${songs.title} LIKE ${like} OR ${songs.artist} LIKE ${like})`,
+    )
   }
   if (quality) conditions.push(eq(songs.syncQuality, quality))
   if (verified !== undefined) conditions.push(eq(songs.syncVerified, verified ? 1 : 0))
+  if (genres && genres.length) conditions.push(or(...genres.map((g) => eq(songs.genre, g))))
   const whereClause = conditions.length ? and(...conditions) : sql`1=1`
-  const orderExpr =
-    sortDir === 'desc' ? desc(sql`${songs.title} COLLATE NOCASE`) : asc(sql`${songs.title} COLLATE NOCASE`)
+  const sortExpr = SONG_SORT_EXPR[sortBy] ?? SONG_SORT_EXPR.title
+  const orderExpr = sortDir === 'desc' ? desc(sortExpr) : asc(sortExpr)
 
   const rows = db.select().from(songs).where(whereClause).orderBy(orderExpr).limit(limit).offset(offset).all()
   const total = db.select({ count: sql<number>`count(*)` }).from(songs).where(whereClause).get()?.count ?? 0
@@ -190,31 +219,32 @@ export interface NewSong {
   instrumentalPath: string | null
 }
 
-export function createSong(song: NewSong): Song {
-  const row = { ...song, syncVerified: 0, genre: null, createdAt: Date.now() }
-  db.insert(songs).values(row).run()
-  return toWireSong(row)
-}
-
-/** IDs de `CATEGORIES` (shared/domain.ts) elegidas para mostrar en Inicio,
- * en orden — hasta 3. Mismo patrón que getImportRoots/setImportRoots. */
-export function getHomeCategories(): CategoryId[] {
-  const row = db.select().from(settings).where(eq(settings.key, 'homeCategories')).get()
-  if (!row) return ['nuevas', 'verificadas', 'cumbia']
-  try {
-    const parsed = JSON.parse(row.value)
-    return Array.isArray(parsed) ? (parsed as CategoryId[]) : ['nuevas', 'verificadas', 'cumbia']
-  } catch {
-    return ['nuevas', 'verificadas', 'cumbia']
-  }
-}
-
-export function setHomeCategories(ids: CategoryId[]): void {
-  const value = JSON.stringify(ids.slice(0, 3))
-  db.insert(settings)
-    .values({ key: 'homeCategories', value })
-    .onConflictDoUpdate({ target: settings.key, set: { value } })
+/** Contador monotónico en `settings` (key `songNumberSeq`) — a propósito NO
+ * es `max(number)+1` sobre las filas de `songs`: si se borra la canción con
+ * el número más alto, ese máximo baja y el próximo alta reemitiría un
+ * número ya usado. Este valor solo crece, nunca se deriva de lo que quede. */
+function nextSongNumber(tx: Parameters<Parameters<typeof db.transaction>[0]>[0]): number {
+  const row = tx.select().from(settings).where(eq(settings.key, 'songNumberSeq')).get()
+  const next = (row ? Number(row.value) : 0) + 1
+  tx.insert(settings)
+    .values({ key: 'songNumberSeq', value: String(next) })
+    .onConflictDoUpdate({ target: settings.key, set: { value: String(next) } })
     .run()
+  return next
+}
+
+export function createSong(song: NewSong): Song {
+  return db.transaction((tx) => {
+    const number = nextSongNumber(tx)
+    const row = { ...song, syncVerified: 0, genre: null, number, createdAt: Date.now() }
+    tx.insert(songs).values(row).run()
+    return toWireSong(row)
+  })
+}
+
+export function getSongByNumber(number: number): Song | null {
+  const row = db.select().from(songs).where(eq(songs.number, number)).get()
+  return row ? toWireSong(row) : null
 }
 
 export function getBackgroundVideoUrl(): string | null {
@@ -414,7 +444,7 @@ function toWireQueueItem(row: typeof queueItems.$inferSelect, song: Song, singer
     singerPhotoUrl: singer.photoUrl,
     status: row.status as QueueStatus,
     score: row.score,
-    song: { id: song.id, title: song.title, artist: song.artist },
+    song: { id: song.id, title: song.title, artist: song.artist, number: song.number },
   }
 }
 
@@ -801,5 +831,45 @@ export function setBannerOrder(ids: string[]): void {
     ids.forEach((id, position) => {
       tx.update(banners).set({ position }).where(eq(banners.id, id)).run()
     })
+  })
+}
+
+// --- metadata de templates de Fun Box ("cara en el escenario") ----------
+
+export function getAllTemplateMeta(): Record<string, { name: string; hotkey: number | null }> {
+  const rows = db.select().from(templateMeta).all()
+  return Object.fromEntries(rows.map((r) => [r.id, { name: r.name, hotkey: r.hotkey }]))
+}
+
+export function createTemplateMeta(id: string, name: string): void {
+  db.insert(templateMeta).values({ id, name, hotkey: null, createdAt: Date.now() }).run()
+}
+
+/** Un template subido antes de que existiera esta tabla no tiene fila propia
+ * — `listTemplates()` llama esto por cada carpeta sin metadata la primera
+ * vez que la lista, así el nombre queda fijo (no se recalcula por posición
+ * en cada request) y un PATCH posterior (renombrar/asignar hotkey) ya
+ * encuentra la fila para actualizar en vez de perderse en un UPDATE de 0
+ * filas. `onConflictDoNothing` evita pisar una fila que ya se creó mientras
+ * tanto (dos requests concurrentes leyendo la lista). */
+export function ensureTemplateMeta(id: string, fallbackName: string): void {
+  db.insert(templateMeta).values({ id, name: fallbackName, hotkey: null, createdAt: Date.now() }).onConflictDoNothing().run()
+}
+
+export function deleteTemplateMeta(id: string): void {
+  db.delete(templateMeta).where(eq(templateMeta.id, id)).run()
+}
+
+/** Si `patch.hotkey` ya está en uso por otro template, ese otro queda en
+ * `null` en la misma transacción — nunca dos templates comparten número. */
+export function updateTemplateMeta(id: string, patch: { name?: string; hotkey?: number | null }): void {
+  db.transaction((tx) => {
+    if (typeof patch.hotkey === 'number') {
+      tx.update(templateMeta).set({ hotkey: null }).where(eq(templateMeta.hotkey, patch.hotkey)).run()
+    }
+    const set: { name?: string; hotkey?: number | null } = {}
+    if (patch.name !== undefined) set.name = patch.name
+    if (patch.hotkey !== undefined) set.hotkey = patch.hotkey
+    if (Object.keys(set).length > 0) tx.update(templateMeta).set(set).where(eq(templateMeta.id, id)).run()
   })
 }

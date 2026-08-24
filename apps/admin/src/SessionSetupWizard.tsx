@@ -256,21 +256,35 @@ export function SessionSetupWizard({
   const stepIndex = step === 'singer' ? 1 : step === 'songs' ? 2 : 3
 
   return (
-    <div className="modal-backdrop" onClick={() => step !== 'syncing' && !busy && onClose()}>
-      <div className="modal-panel wizard-modal" ref={dialogRef} onClick={(e) => e.stopPropagation()}>
+    <div className="hck-scope hck-dialog-back" onClick={() => step !== 'syncing' && !busy && onClose()}>
+      <div
+        className="hck-dialog"
+        ref={dialogRef}
+        onClick={(e) => e.stopPropagation()}
+        style={{ width: 'min(680px,100%)', maxHeight: '86vh', overflowY: 'auto' }}
+      >
         {step !== 'syncing' && (
-          <div className="wizard-modal-head">
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '20px' }}>
             <div>
               <h2>Armar la sesión</h2>
-              <p className="hint">
+              <p className="hck-faint" style={{ marginTop: '8px', fontSize: '15px' }}>
                 {sessionSingers.length === 0
                   ? 'Cargá al primer cantante y sus canciones.'
                   : `${sessionSingers.length} cantante${sessionSingers.length === 1 ? '' : 's'} · ${queuedTotal} canción${queuedTotal === 1 ? '' : 'es'} en la cola`}
               </p>
             </div>
-            <div className="wizard-dots" aria-hidden>
+            <div style={{ display: 'flex', gap: '7px', flex: 'none', paddingTop: '6px' }} aria-hidden>
               {[1, 2, 3].map((n) => (
-                <span key={n} className={`wizard-dot${n === stepIndex ? ' active' : ''}`} />
+                <span
+                  key={n}
+                  style={{
+                    width: n === stepIndex ? '22px' : '8px',
+                    height: '8px',
+                    borderRadius: '99px',
+                    background: n === stepIndex ? 'var(--hck-accent)' : 'var(--hck-line-2)',
+                    transition: 'width .18s ease',
+                  }}
+                />
               ))}
             </div>
           </div>
@@ -287,14 +301,16 @@ export function SessionSetupWizard({
               previewTemplate={stickerPreviewTemplate}
               onEnter={submitSinger}
             />
-            {error && <p className="error">{error}</p>}
-            <div className="step-actions">
+            {error && (
+              <p style={{ color: '#FCA5A5', fontSize: '14.5px' }}>{error}</p>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
               {sessionSingers.length > 0 && (
-                <button className="btn-secondary" onClick={() => setStep('next')} disabled={busy}>
+                <button className="hck-btn hck-btn-secondary" onClick={() => setStep('next')} disabled={busy}>
                   Volver
                 </button>
               )}
-              <button className="btn-primary" onClick={submitSinger} disabled={busy || !singerValue.name.trim()}>
+              <button className="hck-btn hck-btn-primary" onClick={submitSinger} disabled={busy || !singerValue.name.trim()}>
                 {busy ? 'Guardando…' : 'Siguiente: sus canciones'}
               </button>
             </div>
@@ -303,32 +319,62 @@ export function SessionSetupWizard({
 
         {step === 'songs' && activeSinger && (
           <>
-            <div className="wizard-singer-banner">
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '14px',
+                padding: '14px 16px',
+                borderRadius: 'var(--hck-r-md)',
+                background: 'var(--hck-surface-2)',
+                border: '1px solid var(--hck-line)',
+              }}
+            >
               {activeSinger.photoUrl ? (
-                <img className="singer-thumb" src={activeSinger.photoUrl} alt="" />
+                <img
+                  src={activeSinger.photoUrl}
+                  alt=""
+                  style={{ width: '46px', height: '46px', borderRadius: '50%', objectFit: 'cover', flex: 'none' }}
+                />
               ) : (
-                <span className="singer-chip-avatar">{activeSinger.name[0]?.toUpperCase()}</span>
+                <span
+                  style={{
+                    width: '46px',
+                    height: '46px',
+                    borderRadius: '50%',
+                    background: 'var(--hck-surface-3)',
+                    display: 'grid',
+                    placeItems: 'center',
+                    fontWeight: 700,
+                    flex: 'none',
+                  }}
+                >
+                  {activeSinger.name[0]?.toUpperCase()}
+                </span>
               )}
-              <div>
-                <strong>{activeSinger.name}</strong>
-                <div className="hint">¿Qué va a cantar?</div>
+              <div style={{ flex: 1 }}>
+                <strong style={{ fontSize: '17px' }}>{activeSinger.name}</strong>
+                <div className="hck-faint" style={{ fontSize: '13.5px', marginTop: '2px' }}>
+                  ¿Qué va a cantar?
+                </div>
               </div>
-              <span className="tag tag-accent">{selectedIds.length} elegidas</span>
+              <span className="hck-tag hck-tag-accent">{selectedIds.length} elegidas</span>
             </div>
 
-            <div className="field">
-              <input
-                type="text"
-                autoFocus
-                placeholder="Buscar por título o artista…"
-                value={songQuery}
-                onChange={(e) => setSongQuery(e.target.value)}
-              />
-            </div>
+            <input
+              type="text"
+              className="hck-input"
+              autoFocus
+              placeholder="Buscar por título o artista…"
+              value={songQuery}
+              onChange={(e) => setSongQuery(e.target.value)}
+            />
 
-            <div className="wizard-song-list">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '320px', overflowY: 'auto' }}>
               {songResults.length === 0 ? (
-                <p className="hint">No hay resultados para esa búsqueda.</p>
+                <p className="hck-faint" style={{ fontSize: '14.5px' }}>
+                  No hay resultados para esa búsqueda.
+                </p>
               ) : (
                 songResults.map((s) => {
                   const picked = selectedIds.includes(s.id)
@@ -336,29 +382,44 @@ export function SessionSetupWizard({
                     <button
                       key={s.id}
                       type="button"
-                      className={`wizard-song-row${picked ? ' is-picked' : ''}`}
                       onClick={() =>
                         setSelectedIds((ids) => (picked ? ids.filter((x) => x !== s.id) : [...ids, s.id]))
                       }
+                      style={{
+                        all: 'unset',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '12px',
+                        padding: '11px 14px',
+                        borderRadius: 'var(--hck-r-md)',
+                        ...(picked
+                          ? { background: 'var(--hck-accent-12)', boxShadow: 'inset 0 0 0 1px var(--hck-accent)' }
+                          : { background: 'transparent' }),
+                      }}
                     >
-                      <span className="song-swatch" style={{ background: songColor(s.id) }} />
-                      <span className="wizard-song-title">
+                      <span style={{ width: '10px', height: '10px', borderRadius: '3px', background: songColor(s.id), flex: 'none' }} />
+                      <span style={{ flex: 1, fontSize: '15.5px', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {s.title}
-                        <span className="dim-cell"> · {s.artist}</span>
+                        <span className="hck-faint" style={{ fontWeight: 500 }}> · {s.artist}</span>
                       </span>
-                      <span className="wizard-song-check">{picked && <Icon name="check" size={14} />}</span>
+                      <span style={{ width: '18px', flex: 'none', color: 'var(--hck-accent-lt)' }}>
+                        {picked && <Icon name="check" size={14} />}
+                      </span>
                     </button>
                   )
                 })
               )}
             </div>
 
-            {error && <p className="error">{error}</p>}
-            <div className="step-actions">
-              <button className="btn-secondary" onClick={() => setStep('next')} disabled={busy}>
+            {error && (
+              <p style={{ color: '#FCA5A5', fontSize: '14.5px' }}>{error}</p>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button className="hck-btn hck-btn-secondary" onClick={() => setStep('next')} disabled={busy}>
                 Después le cargo
               </button>
-              <button className="btn-primary" onClick={submitSongs} disabled={busy}>
+              <button className="hck-btn hck-btn-primary" onClick={submitSongs} disabled={busy}>
                 {busy ? 'Encolando…' : selectedIds.length > 0 ? `Agregar ${selectedIds.length} a la cola` : 'Continuar'}
               </button>
             </div>
@@ -368,35 +429,49 @@ export function SessionSetupWizard({
         {step === 'next' && (
           <>
             {faceswapProgress && faceswapProgress.ready < faceswapProgress.total && (
-              <div className="facepanel-progress">
-                <p className="hint">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <p className="hck-faint" style={{ fontSize: '14px' }}>
                   Preparando caras para Fun Box: {faceswapProgress.ready}/{faceswapProgress.total}
                 </p>
-                <div className="progress-track">
-                  <div
-                    className="progress-fill"
-                    style={{ width: `${(faceswapProgress.ready / faceswapProgress.total) * 100}%` }}
-                  />
+                <div className="hck-jobbar">
+                  <i style={{ width: `${(faceswapProgress.ready / faceswapProgress.total) * 100}%` }} />
                 </div>
               </div>
             )}
-            <div className="wizard-roster">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
               {sessionSingers.map((s) => {
                 const pendingFaceswap = singersWithPendingFaceswap.some((p) => p.id === s.id)
                 return (
-                  <div className="wizard-roster-row" key={s.id}>
+                  <div
+                    key={s.id}
+                    style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '9px 4px' }}
+                  >
                     {s.photoUrl ? (
-                      <img className="singer-thumb" src={s.photoUrl} alt="" />
+                      <img src={s.photoUrl} alt="" style={{ width: '38px', height: '38px', borderRadius: '50%', objectFit: 'cover', flex: 'none' }} />
                     ) : (
-                      <span className="singer-chip-avatar">{s.name[0]?.toUpperCase()}</span>
+                      <span
+                        style={{
+                          width: '38px',
+                          height: '38px',
+                          borderRadius: '50%',
+                          background: 'var(--hck-surface-3)',
+                          display: 'grid',
+                          placeItems: 'center',
+                          fontWeight: 700,
+                          fontSize: '14px',
+                          flex: 'none',
+                        }}
+                      >
+                        {s.name[0]?.toUpperCase()}
+                      </span>
                     )}
-                    <span className="wizard-roster-name">{s.name}</span>
+                    <span style={{ flex: 1, fontWeight: 600, fontSize: '15.5px' }}>{s.name}</span>
                     {pendingFaceswap && (
-                      <span className="tag tag-outline" title="Preparando su cara para uno o más templates">
+                      <span className="hck-tag hck-tag-outline" title="Preparando su cara para uno o más templates">
                         Preparando cara…
                       </span>
                     )}
-                    <span className={`tag ${songCounts[s.id] ? 'tag-neutral' : 'tag-outline'}`}>
+                    <span className={`hck-tag${songCounts[s.id] ? '' : ' hck-tag-outline'}`}>
                       {songCounts[s.id] ?? 0} canción{(songCounts[s.id] ?? 0) === 1 ? '' : 'es'}
                     </span>
                   </div>
@@ -405,18 +480,20 @@ export function SessionSetupWizard({
             </div>
 
             {singersWithoutSongs.length > 0 && (
-              <p className="hint">
+              <p className="hck-faint" style={{ fontSize: '14px' }}>
                 Sin canciones todavía: {singersWithoutSongs.map((s) => s.name).join(', ')}. Podés cargarles desde
                 Biblioteca en cualquier momento.
               </p>
             )}
-            {error && <p className="error">{error}</p>}
+            {error && (
+              <p style={{ color: '#FCA5A5', fontSize: '14.5px' }}>{error}</p>
+            )}
 
-            <div className="step-actions">
-              <button className="btn-secondary" onClick={goAddAnother} disabled={busy}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px' }}>
+              <button className="hck-btn hck-btn-secondary" onClick={goAddAnother} disabled={busy}>
                 <Icon name="plus" size={14} /> Agregar otro cantante
               </button>
-              <button className="btn-primary" onClick={requestBegin} disabled={busy}>
+              <button className="hck-btn hck-btn-primary" onClick={requestBegin} disabled={busy}>
                 Comenzar la sesión
               </button>
             </div>
@@ -425,16 +502,16 @@ export function SessionSetupWizard({
 
         {step === 'warn-faceswap' && (
           <>
-            <p className="wizard-warn">
+            <p style={{ fontSize: '15.5px', lineHeight: 1.6 }}>
               Todavía se está preparando la cara de <strong>{singersWithPendingFaceswap.map((s) => s.name).join(', ')}</strong>{' '}
               para uno o más templates de Fun Box. Si arrancás ahora, esos hotkeys pueden no estar listos apenas les
               toque el turno.
             </p>
-            <div className="step-actions">
-              <button className="btn-secondary" onClick={() => setStep('next')}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button className="hck-btn hck-btn-secondary" onClick={() => setStep('next')}>
                 Esperar un poco más
               </button>
-              <button className="btn-primary" onClick={confirmFaceswapWarning}>
+              <button className="hck-btn hck-btn-primary" onClick={confirmFaceswapWarning}>
                 Comenzar igual
               </button>
             </div>
@@ -443,15 +520,15 @@ export function SessionSetupWizard({
 
         {step === 'warn-single' && (
           <>
-            <p className="wizard-warn">
+            <p style={{ fontSize: '15.5px', lineHeight: 1.6 }}>
               Hay <strong>un solo cantante</strong> cargado. La sesión funciona igual, pero no va a haber turnos ni
               competencia hasta que sumes a alguien más.
             </p>
-            <div className="step-actions">
-              <button className="btn-secondary" onClick={goAddAnother}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button className="hck-btn hck-btn-secondary" onClick={goAddAnother}>
                 Agregar otro cantante
               </button>
-              <button className="btn-primary" onClick={() => void runBegin()}>
+              <button className="hck-btn hck-btn-primary" onClick={() => void runBegin()}>
                 Comenzar igual
               </button>
             </div>
@@ -459,16 +536,15 @@ export function SessionSetupWizard({
         )}
 
         {step === 'syncing' && (
-          <div className="wizard-syncing">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', padding: '20px 0' }}>
             <h2>Preparando el show…</h2>
-            <p className="hint">Sincronizando las caras de los cantantes con los videos del Fun Box.</p>
-            <div className="progress-track">
-              <div
-                className="progress-fill"
-                style={{ width: syncTotal > 0 ? `${(syncDone / syncTotal) * 100}%` : '100%' }}
-              />
+            <p className="hck-faint" style={{ fontSize: '15px' }}>
+              Sincronizando las caras de los cantantes con los videos del Fun Box.
+            </p>
+            <div className="hck-jobbar">
+              <i style={{ width: syncTotal > 0 ? `${(syncDone / syncTotal) * 100}%` : '100%' }} />
             </div>
-            <p className="hint">
+            <p className="hck-faint" style={{ fontSize: '14px' }}>
               {syncDone} de {syncTotal}
             </p>
           </div>

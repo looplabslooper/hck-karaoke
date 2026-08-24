@@ -28,6 +28,10 @@ import { SessionSetupWizard } from './SessionSetupWizard'
 import { SessionResults } from './SessionResults'
 import { songColor } from './songColor'
 import { Icon, type IconName } from './icons'
+import { Rail } from './Rail'
+import { FunBox } from './FunBox'
+import { Marquee } from './Marquee'
+import { WaitStrip } from './WaitStrip'
 
 // Kiosco de karaoke de una sola pantalla: navegación/biblioteca y el motor
 // de audio real (Web Audio) conviven en esta misma app — ver ROADMAP.md.
@@ -44,6 +48,16 @@ type FaceSwapTrigger =
   | { kind: 'sticker'; template: Extract<Template, { kind: 'sticker' }>; photoUrl: string; oval: Singer['oval'] }
   | { kind: 'faceswap'; singerId: string; templateId: string }
 
+type SongSortColumn = 'title' | 'artist' | 'genre' | 'format' | 'quality'
+
+const SORTABLE_COLUMNS: { key: SongSortColumn; label: string }[] = [
+  { key: 'title', label: 'Canción' },
+  { key: 'artist', label: 'Artista' },
+  { key: 'genre', label: 'Género' },
+  { key: 'format', label: 'Formato' },
+  { key: 'quality', label: 'Calidad' },
+]
+
 const QUALITY_LABEL: Record<Song['syncQuality'], string> = {
   excellent: 'Excelente',
   interpolated: 'Interpolada',
@@ -51,9 +65,9 @@ const QUALITY_LABEL: Record<Song['syncQuality'], string> = {
 }
 
 const QUALITY_COLOR: Record<Song['syncQuality'], string> = {
-  excellent: 'var(--accent)',
-  interpolated: 'var(--info)',
-  none: 'var(--text-dim)',
+  excellent: 'var(--hck-accent-lt)',
+  interpolated: '#93C5FD',
+  none: 'var(--hck-faint)',
 }
 
 const FORMAT_LABEL: Record<Song['sourceFormat'], string> = {
@@ -71,6 +85,49 @@ function formatTime(seconds: number): string {
   const m = Math.floor(total / 60)
   const s = total % 60
   return `${m}:${s.toString().padStart(2, '0')}`
+}
+
+/** Tarjeta de acceso a una sub-pantalla, usada por los hubs de Studio y
+ * Configuración — mismo patrón que `hubCard()` en la referencia. */
+function hubCard(icon: IconName, title: string, body: string, onClick: () => void, tag?: string) {
+  return (
+    <button
+      key={title}
+      onClick={onClick}
+      className="hck-pressable"
+      style={{
+        all: 'unset',
+        cursor: 'pointer',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '14px',
+        padding: 'clamp(20px,1.8vw,30px)',
+        borderRadius: 'var(--hck-r-lg)',
+        background: 'var(--hck-surface)',
+        border: '1px solid var(--hck-line)',
+      }}
+    >
+      <span style={{ color: 'var(--hck-accent-lt)' }}><Icon name={icon} size={28} /></span>
+      {tag && <span className="hck-tag hck-tag-outline" style={{ alignSelf: 'flex-start' }}>{tag}</span>}
+      <span style={{ fontSize: '21px', fontWeight: 700, letterSpacing: '-.025em' }}>{title}</span>
+      <span className="hck-muted" style={{ fontSize: '15.5px', lineHeight: 1.5 }}>{body}</span>
+      <span style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--hck-accent-lt)', fontWeight: 600, fontSize: '15px' }}>
+        Abrir <Icon name="chevR" size={16} />
+      </span>
+    </button>
+  )
+}
+
+/** Cañones de luz violeta detrás de una tarjeta "destacada" (`.hck-stage` +
+ * `.hck-card-hi`) — decoración pura, ver hck-theme.css `.hck-beams`. */
+function beams(n = 3) {
+  return (
+    <div className="hck-beams">
+      {Array.from({ length: n }, (_, i) => (
+        <i key={i} style={{ ['--a' as string]: `${-30 + i * 24}deg`, left: `${12 + i * 30}%`, animationDelay: `${i * 1.4}s` }} />
+      ))}
+    </div>
+  )
 }
 
 
@@ -93,11 +150,17 @@ type Page =
   | 'fondo'
   | 'funbox'
   | 'configuracion'
-  | 'categorias'
   | 'banners'
   | 'portadas'
   | 'importar'
 type WizardStep = 1 | 2 | 3 | 4
+
+/** Trabajo en curso visible desde cualquier pantalla (ver `bgJobs` en App). */
+interface BgJob {
+  id: string
+  label: string
+  returnPage: Page
+}
 
 interface ImportCandidate {
   key: string
@@ -111,14 +174,16 @@ interface ImportCandidate {
 
 // Playlists queda fuera de la nav por ahora (a pedido explícito, "después
 // refinamos esto") — el código/página sigue vivo, solo no hay forma de
-// llegar ahí desde la UI todavía.
-const NAV_ITEMS: { id: Page; label: string; icon: IconName }[] = [
-  { id: 'inicio', label: 'Inicio', icon: 'home' },
-  { id: 'biblioteca', label: 'Biblioteca de canciones', icon: 'search' },
-  { id: 'cola', label: 'Sesión de Karaoke', icon: 'list' },
-  { id: 'studio', label: 'Studio', icon: 'wand' },
-  { id: 'configuracion', label: 'Configuración', icon: 'gear' },
-]
+// llegar ahí desde la UI todavía. Los ítems del rail en sí viven en Rail.tsx
+// (ya son su propio componente); acá solo queda el mapeo de atajo de una
+// letra → página, que usa el handler de teclado de más abajo.
+const NAV_HOTKEYS: Record<string, Page> = {
+  i: 'inicio',
+  b: 'biblioteca',
+  s: 'cola',
+  t: 'studio',
+  c: 'configuracion',
+}
 
 const LANGUAGE_OPTIONS: { value: string; label: string }[] = [
   { value: 'es', label: 'Español' },
@@ -170,7 +235,8 @@ export function App() {
   const [liveCameraStream, setLiveCameraStream] = useState<MediaStream | null>(null)
   const [liveCameraError, setLiveCameraError] = useState<string | null>(null)
 
-  // Inicio: hasta 3 categorías elegidas en Configuración → Categorías de inicio.
+  // Inicio: 4 categorías al azar del pool completo en cada carga (REQ-06) —
+  // reemplaza la config manual fija que existía antes en Configuración.
   const [homeCategories, setHomeCategories] = useState<CategoryId[]>([])
   // Banners del carrusel de Inicio (ver PROMPTS-BANNERS.md) — lista abierta,
   // se suben/borran/reordenan desde Configuración → Banners de inicio.
@@ -191,10 +257,21 @@ export function App() {
   // 'todos' | 'si' | 'no' — para curar un pack chico de canciones con la
   // sincronía ya confirmada a oído, y probar cambios contra ese pack.
   const [verifiedFilter, setVerifiedFilter] = useState<'todos' | 'si' | 'no'>('todos')
+  // Selección múltiple — OR entre los géneros tildados (ver REQ-11).
+  const [genreFilter, setGenreFilter] = useState<Genre[]>([])
+  const [sortBy, setSortBy] = useState<SongSortColumn>('title')
   const [sortAsc, setSortAsc] = useState(true)
   const [songsTotal, setSongsTotal] = useState(0)
   const [songsLoading, setSongsLoading] = useState(false)
   const [libraryView, setLibraryView] = useState<'list' | 'grid'>('list')
+
+  function handleSortBy(col: SongSortColumn) {
+    if (sortBy === col) setSortAsc((v) => !v)
+    else {
+      setSortBy(col)
+      setSortAsc(true)
+    }
+  }
 
   // Modal de re-sincronización (letra y/o idioma mal — sin tocar el audio)
   const [resyncSong, setResyncSong] = useState<Song | null>(null)
@@ -219,6 +296,10 @@ export function App() {
   const [pushSingerPhoto, setPushSingerPhoto] = useState<Blob | null>(null)
   const [pushSingerOval, setPushSingerOval] = useState<Oval | null>(null)
   const [playlistMessage, setPlaylistMessage] = useState<string | null>(null)
+  // Crear playlist inline desde el modal "Agregar a playlist" (REQ-12) —
+  // estado propio, no comparte el de la pantalla Playlists.
+  const [quickPlaylistName, setQuickPlaylistName] = useState('')
+  const [creatingQuickPlaylist, setCreatingQuickPlaylist] = useState(false)
 
   // Sesión de karaoke: agrupa cantantes+fotos+cola+puntajes, como mucho una
   // activa a la vez, efímera — ver ROADMAP.md.
@@ -235,7 +316,6 @@ export function App() {
   const [songCounts, setSongCounts] = useState<Record<string, number>>({})
   const [funboxUploading, setFunboxUploading] = useState(false)
   const [funboxError, setFunboxError] = useState<string | null>(null)
-  const [funboxKind, setFunboxKind] = useState<'sticker' | 'faceswap'>('sticker')
   // Probar un template con la foto de un cantante real, sin depender de
   // pantalla completa ni de una canción sonando — para poder distinguir "no
   // mapea bien" de "no se ve nada" de "se queda en el primer frame".
@@ -257,6 +337,24 @@ export function App() {
   const [queueSingerPhoto, setQueueSingerPhoto] = useState<Blob | null>(null)
   const [queueSingerOval, setQueueSingerOval] = useState<Oval | null>(null)
 
+  // Panel "Cola de espera" plegable en Sesión (REQ-18) — alta rápida por N°
+  // de canción en vez de buscarla por nombre.
+  const [waitStripOpen, setWaitStripOpen] = useState(false)
+  const [waitAddNumber, setWaitAddNumber] = useState('')
+  const [waitAddSingerId, setWaitAddSingerId] = useState<string | null>(null)
+  const [waitAddError, setWaitAddError] = useState<string | null>(null)
+  const [waitAdding, setWaitAdding] = useState(false)
+
+  // Badge de puntaje rápido, hotkey P (REQ-14) — no bloqueante, se cierra sin
+  // guardar con click afuera, Escape, o P de nuevo.
+  const [scoreBadge, setScoreBadge] = useState<{ itemId: string; input: string } | null>(null)
+  const scoreBadgeRef = useRef<HTMLDivElement | null>(null)
+
+  // Popover global "Efectos" (Fun Box) — hotkey X, accesible desde
+  // cualquier pantalla vía la marquesina (ver plan chrome global).
+  const [fxOpen, setFxOpen] = useState(false)
+  const fxPanelRef = useRef<HTMLDivElement | null>(null)
+
   // Wizard "Agregar canción nueva"
   const [wizardStep, setWizardStep] = useState<WizardStep>(1)
   const [wizardTitle, setWizardTitle] = useState('')
@@ -270,6 +368,24 @@ export function App() {
   const [syncError, setSyncError] = useState<string | null>(null)
   const [syncing, setSyncing] = useState(false)
 
+  // Trabajos en curso visibles desde cualquier pantalla (subida/sincro de
+  // canciones) — el fetch sigue corriendo aunque el operador navegue a otra
+  // página (App.tsx no se desmonta, es una SPA), así que esto es solo la
+  // parte visible: un atajo de vuelta + el estado, colapsable, oculto en
+  // modo kiosco.
+  const [bgJobs, setBgJobs] = useState<BgJob[]>([])
+  const [bgJobsExpanded, setBgJobsExpanded] = useState(false)
+
+  function startBgJob(label: string, returnPage: Page): string {
+    const id = crypto.randomUUID()
+    setBgJobs((jobs) => [...jobs, { id, label: label.trim() || 'Canción nueva', returnPage }])
+    return id
+  }
+
+  function endBgJob(id: string) {
+    setBgJobs((jobs) => jobs.filter((j) => j.id !== id))
+  }
+
   // Motor de audio real
   const [lyrics, setLyrics] = useState<LyricsDoc | null>(null)
   const [loading, setLoading] = useState(false)
@@ -279,6 +395,10 @@ export function App() {
   const [scrubValue, setScrubValue] = useState<number | null>(null)
   const [displayPosition, setDisplayPosition] = useState(0)
   const [kioskMode, setKioskMode] = useState(false)
+  // Colapso independiente de nav lateral y menú inferior (REQ-09) — cada uno
+  // con su propio toggle, sin afectarse entre sí.
+  const [railCollapsed, setRailCollapsed] = useState(false)
+  const [marqueeCollapsed, setMarqueeCollapsed] = useState(false)
   const [dimBackground, setDimBackground] = useState(true)
   const [volume, setVolume] = useState(70)
   const [showLyricsOverlay, setShowLyricsOverlay] = useState(false)
@@ -326,15 +446,20 @@ export function App() {
     if (searchQuery.trim()) params.set('q', searchQuery.trim())
     if (qualityFilter !== 'todos') params.set('quality', qualityFilter)
     if (verifiedFilter !== 'todos') params.set('verified', String(verifiedFilter === 'si'))
+    for (const g of genreFilter) params.append('genre', g)
+    params.set('sortBy', sortBy)
     params.set('sort', sortAsc ? 'asc' : 'desc')
     params.set('limit', String(SONGS_PAGE_SIZE))
     params.set('offset', String(offset))
     return params.toString()
   }
 
-  async function refreshHomeCategories() {
-    const res = await fetch('/api/settings/home-categories')
-    setHomeCategories(await res.json())
+  /** 4 categorías al azar del pool completo (REQ-06) — se recalcula cada vez
+   * que se entra a Inicio, no en cada render (ver el `useEffect` que la
+   * llama, guardado por `page === 'inicio'`). */
+  function refreshHomeCategories() {
+    const shuffled = [...CATEGORIES].sort(() => Math.random() - 0.5)
+    setHomeCategories(shuffled.slice(0, 4).map((c) => c.id))
   }
 
   async function refreshBanners() {
@@ -472,13 +597,14 @@ export function App() {
    * el server (pipeline/track_color.py); `kind: 'faceswap'` corre el
    * análisis de cara real (pipeline/analyze_template_face.py), más lento.
    * Sin esto habría que pasar por /template-editor o la terminal a mano. */
-  async function handleUploadTemplate(file: File, kind: 'sticker' | 'faceswap') {
+  async function handleUploadTemplate(file: File, kind: 'sticker' | 'faceswap', name: string) {
     setFunboxUploading(true)
     setFunboxError(null)
     try {
       const form = new FormData()
       form.set('video', file)
       form.set('kind', kind)
+      if (name.trim()) form.set('name', name.trim())
       const res = await fetch('/api/templates', { method: 'POST', body: form })
       const body = await res.json()
       if (!res.ok) throw new Error(body.error ?? 'No se pudo mapear el video')
@@ -489,6 +615,27 @@ export function App() {
     } finally {
       setFunboxUploading(false)
     }
+  }
+
+  async function handleRenameTemplate(id: string, name: string) {
+    await fetch(`/api/templates/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    })
+    refreshTemplates()
+  }
+
+  /** Asignar un hotkey ya tomado libera al template que lo tenía antes — lo
+   * resuelve el server en una sola transacción (ver updateTemplateMeta),
+   * así que alcanza con refrescar la lista completa. */
+  async function handleSetTemplateHotkey(id: string, hotkey: number | null) {
+    await fetch(`/api/templates/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hotkey }),
+    })
+    refreshTemplates()
   }
 
   async function handleDeleteTemplate(id: string) {
@@ -581,6 +728,26 @@ export function App() {
     if (openPlaylist?.id === playlistId) showPlaylist(playlistId)
   }
 
+  /** Crea una playlist nueva y le agrega de una la canción que estaba por
+   * asignar — sin salir del modal "Agregar a playlist" (REQ-12). */
+  async function handleCreatePlaylistAndAdd() {
+    const name = quickPlaylistName.trim()
+    if (!name || !addToPlaylistSong) return
+    setCreatingQuickPlaylist(true)
+    try {
+      const res = await fetch('/api/playlists', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      })
+      const playlist: Playlist = await res.json()
+      setQuickPlaylistName('')
+      await addSongToPlaylist(playlist.id, addToPlaylistSong.id)
+    } finally {
+      setCreatingQuickPlaylist(false)
+    }
+  }
+
   async function removeSongFromPlaylist(playlistId: string, songId: string) {
     await fetch(`/api/playlists/${playlistId}/songs/${songId}`, { method: 'DELETE' })
     refreshPlaylists()
@@ -623,7 +790,6 @@ export function App() {
     refreshPlaylists()
     refreshSession()
     refreshTemplates()
-    refreshHomeCategories()
     refreshBanners()
     refreshCategoryImages()
     refreshCameraDevices()
@@ -639,6 +805,13 @@ export function App() {
     }
     return () => ws.close()
   }, [])
+
+  // Re-sortea las categorías de Inicio cada vez que se entra a esa página
+  // (REQ-06) — no en cada render, si no cambiarían solas mientras se mira.
+  useEffect(() => {
+    if (page === 'inicio') refreshHomeCategories()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page])
 
   // Recién conectada la cámara virtual (OBS recién abierta, por ejemplo) el
   // navegador no la lista hasta este evento — sin esto había que refrescar
@@ -661,7 +834,7 @@ export function App() {
   useEffect(() => {
     const id = setTimeout(() => refreshSongs(), 250)
     return () => clearTimeout(id)
-  }, [searchQuery, qualityFilter, verifiedFilter, sortAsc])
+  }, [searchQuery, qualityFilter, verifiedFilter, genreFilter, sortBy, sortAsc])
 
   useEffect(() => {
     autoAdvanceRef.current = autoAdvance
@@ -696,11 +869,50 @@ export function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [testFaceSwap])
 
+  // Cierra el badge de puntaje rápido (REQ-14) si se clickea afuera — el
+  // Escape/segundo-P que también lo cierran viven en el handler de teclado
+  // grande de más abajo, junto con el resto de los atajos globales.
+  useEffect(() => {
+    if (!scoreBadge) return
+    function onClick(e: MouseEvent) {
+      if (scoreBadgeRef.current && !scoreBadgeRef.current.contains(e.target as Node)) setScoreBadge(null)
+    }
+    document.addEventListener('mousedown', onClick)
+    return () => document.removeEventListener('mousedown', onClick)
+  }, [scoreBadge])
+
+  useEffect(() => {
+    if (!fxOpen) return
+    function onClick(e: MouseEvent) {
+      if (fxPanelRef.current && !fxPanelRef.current.contains(e.target as Node)) setFxOpen(false)
+    }
+    document.addEventListener('mousedown', onClick)
+    return () => document.removeEventListener('mousedown', onClick)
+  }, [fxOpen])
+
   // Atajos de teclado: el kiosco se opera de lejos, muchas veces sin mouse a
   // mano. Se ignoran mientras se escribe en un campo, para no robarle la
   // barra espaciadora a la búsqueda ni a la letra pegada en el wizard.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      // El badge de puntaje (REQ-14) intercepta primero y se come todo lo
+      // demás mientras está abierto — ni siquiera el guard de "typing" aplica
+      // acá, porque abrirlo nunca enfoca ningún input real.
+      if (scoreBadge) {
+        if (e.key === 'Escape' || e.key === 'p' || e.key === 'P') {
+          setScoreBadge(null)
+        } else if (e.key === 'Enter') {
+          const n = Number(scoreBadge.input)
+          if (scoreBadge.input && Number.isInteger(n) && n >= 1 && n <= 10) handleScoreItem(scoreBadge.itemId, n)
+          setScoreBadge(null)
+        } else if (e.key === 'Backspace') {
+          setScoreBadge((b) => (b ? { ...b, input: b.input.slice(0, -1) } : b))
+        } else if (/^[0-9]$/.test(e.key)) {
+          setScoreBadge((b) => (b ? { ...b, input: (b.input + e.key).slice(0, 2) } : b))
+        }
+        return
+      }
+
       const el = e.target as HTMLElement | null
       const typing = !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)
       if (typing || modalOpen) return
@@ -710,6 +922,12 @@ export function App() {
         togglePlayPause()
       } else if (e.key === 'Escape' && kioskMode) {
         exitKiosk()
+      } else if (e.key === 'Escape' && fxOpen) {
+        setFxOpen(false)
+      } else if (e.key === 'e' || e.key === 'E') {
+        setWaitStripOpen((v) => !v)
+      } else if (e.key === 'x' || e.key === 'X') {
+        setFxOpen((v) => !v)
       } else if (e.key === 'f' || e.key === 'F') {
         kioskMode ? exitKiosk() : enterKiosk()
       } else if (e.key === 'ArrowRight') {
@@ -720,13 +938,25 @@ export function App() {
         seekPlayback(getPositionSeconds() - 5)
       } else if (e.key === 'n' || e.key === 'N') {
         handleAdvanceQueue()
+      } else if ((e.key === 'p' || e.key === 'P') && session && queue[0]?.status === 'playing') {
+        setScoreBadge({ itemId: queue[0].id, input: '' })
       } else if (kioskMode && session && e.key >= '1' && e.key <= '9') {
-        const template = templates[Number(e.key) - 1]
+        const template = templates.find((t) => t.hotkey === Number(e.key))
         if (template) triggerFaceSwap(template)
       } else if (kioskMode && e.key === '0') {
         // "0" no mapea a ningún template — es el hotkey explícito para
         // cortar el video de Fun Box en curso y volver al fondo.
         setActiveFaceSwap(null)
+      } else if (!kioskMode && e.key === '/') {
+        e.preventDefault()
+        setPage('biblioteca')
+        setTimeout(() => document.getElementById('library-search')?.focus(), 0)
+      } else if (!kioskMode && e.key === 'v') {
+        // Minúscula nada más: "V" mayúscula (con Shift) no navega — mismo
+        // criterio que el resto de los atajos de una letra de acá abajo.
+        enterKiosk()
+      } else if (!kioskMode && !e.metaKey && !e.ctrlKey && NAV_HOTKEYS[e.key]) {
+        setPage(NAV_HOTKEYS[e.key])
       }
     }
     window.addEventListener('keydown', onKey)
@@ -1099,15 +1329,21 @@ export function App() {
     setUploadMessage(null)
     setUploadError(null)
     const form = e.currentTarget
-    const res = await fetch('/api/songs', { method: 'POST', body: new FormData(form) })
-    const body = await res.json()
-    if (!res.ok) {
-      setUploadError(body.error ?? 'Error desconocido')
-      return
+    const formData = new FormData(form)
+    const jobId = startBgJob(String(formData.get('title') ?? ''), 'subir')
+    try {
+      const res = await fetch('/api/songs', { method: 'POST', body: formData })
+      const body = await res.json()
+      if (!res.ok) {
+        setUploadError(body.error ?? 'Error desconocido')
+        return
+      }
+      setUploadMessage(`"${body.song.title}" agregada — ${body.message}`)
+      form.reset()
+      refreshSongs()
+    } finally {
+      endBgJob(jobId)
     }
-    setUploadMessage(`"${body.song.title}" agregada — ${body.message}`)
-    form.reset()
-    refreshSongs()
   }
 
   async function handleBackgroundVideo(e: FormEvent<HTMLFormElement>) {
@@ -1339,6 +1575,45 @@ export function App() {
     refreshSession()
   }
 
+  /** Alta rápida por N° de canción (REQ-18) — a diferencia de
+   * `submitAddToQueue`, acá el cantante ya existe en la sesión (se elige de
+   * un `<select>`), no hay que crear uno nuevo con foto. */
+  async function handleWaitAdd() {
+    const n = Number(waitAddNumber)
+    if (!waitAddNumber.trim() || !Number.isInteger(n)) {
+      setWaitAddError('Escribí un número de canción válido.')
+      return
+    }
+    if (!waitAddSingerId) {
+      setWaitAddError('Elegí a quién le toca.')
+      return
+    }
+    setWaitAdding(true)
+    setWaitAddError(null)
+    try {
+      const songRes = await fetch(`/api/songs/by-number/${n}`)
+      if (!songRes.ok) {
+        setWaitAddError(`No hay ninguna canción con el N° ${n}.`)
+        return
+      }
+      const song: Song = await songRes.json()
+      const res = await fetch('/api/queue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ songId: song.id, singerId: waitAddSingerId }),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        setWaitAddError(body.error ?? 'No se pudo agregar a la cola.')
+        return
+      }
+      setWaitAddNumber('')
+      refreshQueue()
+    } finally {
+      setWaitAdding(false)
+    }
+  }
+
   async function handleRemoveFromQueue(id: string) {
     await fetch(`/api/queue/${id}`, { method: 'DELETE' })
     refreshQueue()
@@ -1418,6 +1693,16 @@ export function App() {
 
   const stickerTemplates = templates.filter((t): t is Extract<Template, { kind: 'sticker' }> => t.kind === 'sticker')
   const faceswapTemplates = templates.filter((t): t is Extract<Template, { kind: 'faceswap' }> => t.kind === 'faceswap')
+
+  // Con hotkey asignado primero (en orden 1-9), el resto después — el panel
+  // en vivo de Sesión los muestra todos (clickeables con el mouse igual),
+  // pero el número solo lo tienen los que de verdad responden al teclado.
+  const templatesByHotkey = [...templates].sort((a, b) => {
+    if (a.hotkey != null && b.hotkey != null) return a.hotkey - b.hotkey
+    if (a.hotkey != null) return -1
+    if (b.hotkey != null) return 1
+    return 0
+  })
 
   // Progreso agregado de los renders faceswap en curso — cada combinación
   // cantante-con-foto × template `faceswap` cuenta una vez. Sirve para un
@@ -1589,6 +1874,7 @@ export function App() {
     if (!wizardAudioFile || !wizardLyricsText.trim() || syncing) return
     setSyncError(null)
     setSyncing(true)
+    const jobId = startBgJob(wizardTitle, 'generar')
     try {
       const form = new FormData()
       form.set('title', wizardTitle)
@@ -1610,6 +1896,7 @@ export function App() {
       setSyncError(err instanceof Error ? err.message : String(err))
     } finally {
       setSyncing(false)
+      endBgJob(jobId)
     }
   }
 
@@ -1624,83 +1911,106 @@ export function App() {
   const isBakedVideo = !!nowPlayingSong && !usesWebAudioEngine(nowPlayingSong) && !!nowPlayingSong.videoUrl
 
   return (
-    <div className={`app${kioskMode ? ' kiosk-mode' : ''}`}>
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="brand-row">
-            <span className="brand-mark">HCK</span>
-            <span className="brand-kicker">Karaoke</span>
-          </div>
-          <div className="brand-sub">High Class Karaoke</div>
-          <div className="brand-tagline">Donde el que canta, brilla.</div>
-        </div>
+    <div className="hck-app" style={{ ['--hck-rail-w' as string]: kioskMode ? '0px' : railCollapsed ? '72px' : 'clamp(230px,16vw,300px)' }}>
+      {/* Rail y contenido se sacan del árbol por completo en modo kiosco (no
+         solo se ocultan por CSS) — .performance necesita ser el único
+         contenido visible para que su height:100vh se comporte bien, y
+         depender de una clase CSS puntual (como pasaba antes con .sidebar)
+         es frágil: si el componente cambia de nombre de clase, la regla deja
+         de aplicar en silencio. Esto ya pasó una vez (ver Rail.tsx). */}
+      {!kioskMode && (
+        <Rail
+          page={page}
+          onNav={setPage}
+          onEnterKiosk={enterKiosk}
+          session={session}
+          sessionSingers={sessionSingers}
+          queue={queue}
+          faceswapProgress={faceswapProgress}
+          collapsed={railCollapsed}
+          onToggleCollapse={() => setRailCollapsed((v) => !v)}
+          onStartSession={handleStartSession}
+          onGoToSession={handleGoToSession}
+          onEndSession={handleEndSession}
+        />
+      )}
 
-        <nav>
-          <div className="nav-eyebrow">Backstage</div>
-          {NAV_ITEMS.map((item) => (
-            <button
-              key={item.id}
-              className={`nav-btn${page === item.id ? ' active' : ''}`}
-              onClick={() => setPage(item.id)}
-            >
-              <Icon name={item.icon} size={17} />
-              {item.label}
-            </button>
-          ))}
-        </nav>
-
-        {/* Único punto de entrada a la sesión, y visible en todas las
-            pantallas porque el sidebar es persistente: arranca una, o
-            devuelve a la que está en curso desde donde sea que esté el
-            operador. */}
-        <div className={`session-box${session ? ` is-${session.status}` : ''}`}>
-          {!session ? (
-            <>
-              <div className="session-status">
-                <span className="session-dot" />
-                Sesión: no iniciada
-              </div>
-              <button className="btn-primary btn-block" onClick={handleStartSession}>
-                <Icon name="mic" size={15} /> Iniciar sesión
-              </button>
-            </>
-          ) : (
-            <>
-              <button className="session-return" onClick={handleGoToSession}>
-                <div className="session-status">
-                  <span className={`session-dot${session.status === 'corriendo' ? ' active' : ' armando'}`} />
-                  {session.status === 'armando' ? 'Armando sesión' : 'En vivo'}
-                </div>
-                <div className="session-meta">
-                  {sessionSingers.length} cantante{sessionSingers.length === 1 ? '' : 's'} · {queue.length} en cola
-                </div>
-              </button>
-              {session.status === 'armando' && (
-                <button className="btn-primary btn-block" onClick={handleGoToSession}>
-                  Seguir armando
-                </button>
-              )}
-              <button className="btn-secondary btn-block" onClick={handleEndSession}>
-                Terminar sesión
-              </button>
-            </>
-          )}
-        </div>
-      </aside>
-
-      <main className="stage">
-        <section className={`page${page === 'inicio' ? ' active' : ''}`}>
-          <div className="stage-head">
+      {!kioskMode && (
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        {session && (
+          <WaitStrip
+            queue={queue}
+            sessionSingers={sessionSingers}
+            open={waitStripOpen}
+            onToggle={() => setWaitStripOpen((v) => !v)}
+            waitAddNumber={waitAddNumber}
+            onWaitAddNumberChange={setWaitAddNumber}
+            waitAddSingerId={waitAddSingerId}
+            onWaitAddSingerIdChange={setWaitAddSingerId}
+            waitAddError={waitAddError}
+            waitAdding={waitAdding}
+            onWaitAdd={handleWaitAdd}
+          />
+        )}
+      <main className="hck-scope" style={{ flex: 1, minWidth: 0, overflowY: 'auto', overflowX: 'hidden', background: 'var(--hck-bg)' }}>
+        {page === 'inicio' && (
+        <div style={{ padding: 'clamp(24px,2.2vw,44px) clamp(24px,3vw,68px) 160px', display: 'flex', flexDirection: 'column', gap: 'clamp(24px,2.4vw,44px)' }}>
+          <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: '28px', flexWrap: 'wrap' }}>
             <div>
               <h1>High Class Karaoke</h1>
-              <p>Donde el que canta, brilla.</p>
+              <p className="hck-muted" style={{ marginTop: '10px', fontSize: 'clamp(15px,1.1vw,19px)' }}>
+                Donde el que canta, brilla.
+              </p>
             </div>
-            <button className="btn-primary" onClick={() => setPage('biblioteca')}>
+            <button className="hck-btn hck-btn-primary hck-btn-lg" onClick={() => setPage('biblioteca')}>
               Ver toda la biblioteca
             </button>
           </div>
 
           <BannerCarousel banners={banners} />
+
+          {/* "La sesión sigue" — acceso rápido de vuelta al show desde
+             Inicio mientras hay una sesión corriendo, sin tener que ir a
+             buscar el botón "En vivo" del rail. */}
+          {session?.status === 'corriendo' && (
+            <div
+              className="hck-card"
+              style={{ flexDirection: 'row', alignItems: 'center', gap: '22px', borderColor: 'var(--hck-accent)', background: 'linear-gradient(100deg,var(--hck-accent-12),transparent 60%),var(--hck-surface)' }}
+            >
+              <div
+                style={{
+                  width: '52px',
+                  height: '52px',
+                  flex: 'none',
+                  display: 'grid',
+                  placeItems: 'center',
+                  borderRadius: '50%',
+                  background: 'var(--hck-accent-dk)',
+                  border: '2px solid var(--hck-accent)',
+                  boxShadow: 'var(--hck-glow)',
+                  overflow: 'hidden',
+                }}
+              >
+                {queue[0]?.status === 'playing' && queue[0].singerPhotoUrl ? (
+                  <img src={queue[0].singerPhotoUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                ) : (
+                  <Icon name="mic" size={24} />
+                )}
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <span className="hck-kicker">La sesión sigue</span>
+                <div style={{ fontSize: '20px', fontWeight: 700, letterSpacing: '-.02em' }}>
+                  {nowPlayingSong ? `Está sonando ${nowPlayingSong.title}` : 'Nadie está cantando ahora'}
+                </div>
+                <div className="hck-muted" style={{ fontSize: '15px' }}>
+                  {sessionSingers.length} cantante{sessionSingers.length === 1 ? '' : 's'} · {queue.length} {queue.length === 1 ? 'canción' : 'canciones'} pendiente{queue.length === 1 ? '' : 's'}
+                </div>
+              </div>
+              <button className="hck-btn hck-btn-primary hck-btn-lg" onClick={enterKiosk}>
+                Ir a la sesión en curso <span className="hck-kbd" style={{ marginLeft: '4px' }}>V</span>
+              </button>
+            </div>
+          )}
 
           {homeCategories.map((catId) => (
             <CategoryCarousel
@@ -1714,104 +2024,154 @@ export function App() {
               onViewAll={() => setPage('biblioteca')}
             />
           ))}
-          <div className="hint">Las categorías se eligen en Configuración → Categorías de inicio.</div>
-        </section>
+        </div>
+        )}
 
-        <section className={`page${page === 'biblioteca' ? ' active' : ''}`}>
-          <div className="stage-head">
+        {page === 'biblioteca' && (
+        <div className="hck-scope hck-enter" style={{ padding: 'clamp(24px,2.2vw,44px) clamp(24px,3vw,68px) 160px', display: 'flex', flexDirection: 'column', gap: 'clamp(24px,2.4vw,44px)' }}>
+          <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: '28px', flexWrap: 'wrap' }}>
             <div>
-              <h1>Biblioteca de canciones</h1>
-              <p>
+              <h2>Biblioteca</h2>
+              <p className="hck-muted" style={{ marginTop: '10px', fontSize: 'clamp(15px,1.1vw,19px)' }}>
                 {songsTotal} canciones{songsTotal !== songs.length ? ` (mostrando ${songs.length})` : ''}. Cada una es
                 una oportunidad para ser la estrella de la noche.
               </p>
             </div>
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
-              <button className="btn-secondary" onClick={() => setPage('playlists')}>
-                <Icon name="playlist" size={15} /> Playlists
+            <div style={{ display: 'flex', gap: '12px' }}>
+              <button className="hck-btn hck-btn-secondary hck-btn-lg" onClick={() => setPage('playlists')}>
+                <Icon name="playlist" size={19} /> Playlists
               </button>
-              <button className="btn-primary" onClick={() => setPage('generar')}>
-                + Agregar canción
+              <button className="hck-btn hck-btn-primary hck-btn-lg" onClick={() => setPage('generar')}>
+                <Icon name="plus" size={19} /> Agregar canción
               </button>
             </div>
           </div>
 
-          <div className="library-toolbar">
-            <div className="search-wrap">
-              <input
-                className="search-input"
-                placeholder="Buscar canción o artista..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-              />
-              {searchQuery && (
-                <button className="search-clear" onClick={() => setSearchQuery('')} aria-label="Limpiar búsqueda">
-                  ✕
-                </button>
-              )}
+          <div style={{ position: 'relative' }}>
+            <div style={{ position: 'absolute', left: '26px', top: '50%', transform: 'translateY(-50%)', color: 'var(--hck-faint)', pointerEvents: 'none' }}>
+              <Icon name="search" size={24} />
             </div>
-            <select
-              className="filter-select"
-              value={qualityFilter}
-              onChange={(e) => setQualityFilter(e.target.value as Song['syncQuality'] | 'todos')}
-            >
-              <option value="todos">Toda calidad de sincronía</option>
-              <option value="excellent">Excelente</option>
-              <option value="interpolated">Interpolada</option>
-              <option value="none">Sin letra</option>
-            </select>
-            <select
-              className="filter-select"
-              value={verifiedFilter}
-              onChange={(e) => setVerifiedFilter(e.target.value as 'todos' | 'si' | 'no')}
-              title="Canciones cuya sincronía ya escuchaste y confirmaste"
-            >
-              <option value="todos">Verificadas y sin verificar</option>
-              <option value="si">Solo verificadas ✓</option>
-              <option value="no">Solo sin verificar</option>
-            </select>
-            <button className="btn-toolbar" onClick={() => setSortAsc((v) => !v)}>
-              Ordenar {sortAsc ? 'A→Z' : 'Z→A'}
-            </button>
-            <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.4rem' }}>
+            <input
+              id="library-search"
+              className="hck-input"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="¿Qué querés cantar?"
+              style={{
+                paddingLeft: '64px',
+                paddingRight: searchQuery ? '56px' : '20px',
+                minHeight: 'clamp(60px,5vw,76px)',
+                fontSize: 'clamp(18px,1.5vw,24px)',
+                fontWeight: 600,
+                borderRadius: 'var(--hck-r-xl)',
+              }}
+            />
+            {searchQuery && (
               <button
-                className="btn-icon"
-                onClick={() => setLibraryView('list')}
-                aria-label="Vista lista"
-                style={libraryView === 'list' ? { borderColor: 'var(--accent)', color: 'var(--accent)' } : undefined}
+                className="hck-btn hck-btn-icon hck-btn-ghost"
+                style={{ position: 'absolute', right: '14px', top: '50%', transform: 'translateY(-50%)' }}
+                onClick={() => setSearchQuery('')}
+                aria-label="Limpiar búsqueda"
               >
-                <Icon name="list" size={16} />
+                <Icon name="x" size={18} />
               </button>
-              <button
-                className="btn-icon"
-                onClick={() => setLibraryView('grid')}
-                aria-label="Vista grilla"
-                style={libraryView === 'grid' ? { borderColor: 'var(--accent)', color: 'var(--accent)' } : undefined}
-              >
-                <Icon name="grid" size={16} />
-              </button>
+            )}
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'clamp(20px,2.2vw,40px)', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <span className="hck-kicker">Sincronía</span>
+              <div className="hck-chips">
+                {(['todos', 'excellent', 'interpolated', 'none'] as const).map((v) => (
+                  <button key={v} className={`hck-chip${qualityFilter === v ? ' hck-chip-on' : ''}`} onClick={() => setQualityFilter(v)}>
+                    {v === 'todos' ? 'Toda sincronía' : QUALITY_LABEL[v]}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <span className="hck-kicker">Verificación</span>
+              <div className="hck-chips">
+                {(['todos', 'si', 'no'] as const).map((v) => (
+                  <button key={v} className={`hck-chip${verifiedFilter === v ? ' hck-chip-on' : ''}`} onClick={() => setVerifiedFilter(v)}>
+                    {v === 'todos' ? 'Verificadas y sin verificar' : v === 'si' ? 'Solo verificadas ✓' : 'Solo sin verificar'}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <span className="hck-kicker">Género</span>
+              <div className="hck-chips">
+                {GENRES.map((g) => (
+                  <button
+                    key={g}
+                    className={`hck-chip${genreFilter.includes(g) ? ' hck-chip-on' : ''}`}
+                    onClick={() => setGenreFilter((prev) => (prev.includes(g) ? prev.filter((x) => x !== g) : [...prev, g]))}
+                  >
+                    {CATEGORIES.find((c) => c.id === g)?.name ?? g}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '14px' }}>
+              {libraryView === 'list' && (
+                <span className="hck-faint" style={{ fontSize: '14px' }}>
+                  Ordená haciendo click en las columnas de la tabla.
+                </span>
+              )}
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  className={`hck-btn hck-btn-icon${libraryView === 'list' ? ' hck-btn-on' : ''}`}
+                  onClick={() => setLibraryView('list')}
+                  aria-label="Vista lista"
+                >
+                  <Icon name="list" size={18} />
+                </button>
+                <button
+                  className={`hck-btn hck-btn-icon${libraryView === 'grid' ? ' hck-btn-on' : ''}`}
+                  onClick={() => setLibraryView('grid')}
+                  aria-label="Vista grilla"
+                >
+                  <Icon name="grid" size={18} />
+                </button>
+              </div>
             </div>
           </div>
 
           {libraryView === 'grid' ? (
-            <div className="carousel-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(200px,1fr))', gap: 'clamp(14px,1.3vw,22px)' }}>
               {songs.map((s) => {
                 const isPlaying = s.id === nowPlayingSong?.id
+                const art = s.genre ? categoryImages[s.genre] : null
                 return (
-                  <div key={s.id} className="card carousel-card">
-                    <div className="carousel-cover-wrap">
-                      <div className="carousel-cover" style={{ background: songColor(s.id) }} />
-                      <button className="btn-icon carousel-play" onClick={() => handlePlay(s.id)} disabled={isPlaying} aria-label="Reproducir">
-                        <Icon name="play" size={14} />
+                  <div key={s.id} className="hck-card" style={{ padding: '13px', borderRadius: 'var(--hck-r-lg)', gap: '12px' }}>
+                    <div style={{ position: 'relative' }}>
+                      <div
+                        className="hck-art"
+                        style={{ width: '100%', aspectRatio: '1', borderRadius: 'var(--hck-r-md)', background: art ? 'linear-gradient(160deg,var(--hck-surface-2),var(--hck-bg-deep))' : songColor(s.id) }}
+                      >
+                        {art && <img src={art} alt="" />}
+                      </div>
+                      <button
+                        className="hck-btn hck-btn-icon"
+                        style={{ position: 'absolute', right: '10px', bottom: '10px', background: 'rgba(10,12,16,.55)' }}
+                        onClick={() => handlePlay(s.id)}
+                        disabled={isPlaying}
+                        aria-label="Reproducir"
+                      >
+                        <Icon name="play" size={16} />
                       </button>
                     </div>
-                    <div className="card-title">{s.title}</div>
-                    <div className="card-meta">{s.artist}</div>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '0.4rem' }}>
-                      <span className="badge" style={{ ['--quality-color' as string]: QUALITY_COLOR[s.syncQuality] }}>
-                        {QUALITY_LABEL[s.syncQuality]}
-                      </span>
-                      <button className="btn-icon" onClick={() => openAddToQueue(s)} disabled={!session} title="Agregar a la cola">
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                      <span style={{ fontSize: '16.5px', fontWeight: 700, letterSpacing: '-.02em', lineHeight: 1.2 }}>{s.title}</span>
+                      <span className="hck-muted" style={{ fontSize: '14px' }}>{s.artist}</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span className="hck-tag hck-tag-outline hck-mono" style={{ fontSize: '12px' }}>#{s.number}</span>
+                        <span className="hck-tag" style={{ color: QUALITY_COLOR[s.syncQuality] }}>{QUALITY_LABEL[s.syncQuality]}</span>
+                      </div>
+                      <button className="hck-btn hck-btn-icon" onClick={() => openAddToQueue(s)} disabled={!session} title="Agregar a la cola">
                         <Icon name="plus" size={14} />
                       </button>
                     </div>
@@ -1819,216 +2179,240 @@ export function App() {
                 )
               })}
               {songs.length === 0 && !songsLoading && (
-                <div className="no-results">Ninguna canción coincide. Probá otra búsqueda o filtro.</div>
+                <p className="hck-muted" style={{ gridColumn: '1 / -1', textAlign: 'center', padding: '40px' }}>
+                  Ninguna canción coincide. Probá otra búsqueda o filtro.
+                </p>
               )}
             </div>
           ) : (
-            <div className="library-table">
-              <div className="library-row library-row--head">
-                <div>Canción</div>
-                <div>Artista</div>
-                <div>Género</div>
-                <div>Formato</div>
-                <div>Calidad</div>
-                <div />
-              </div>
-              {songs.map((s) => {
-                const isPlaying = s.id === nowPlayingSong?.id
-                return (
-                  <div key={s.id} className={`library-row${isPlaying ? ' is-playing' : ''}`}>
-                    <div className="song-cell">
-                      <div className="song-swatch" style={{ background: songColor(s.id) }} />
-                      {s.title}
-                    </div>
-                    <div className="dim-cell">{s.artist}</div>
-                    <div>
-                      <select
-                        className="genre-select"
-                        value={s.genre ?? ''}
-                        onChange={(e) => handleSetGenre(s.id, (e.target.value || null) as Genre | null)}
-                        title="Género (para las categorías de Inicio)"
+            <div style={{ overflowX: 'auto' }}>
+              <table className="hck-table">
+                <thead>
+                  <tr>
+                    <th>N°</th>
+                    {SORTABLE_COLUMNS.map((c) => (
+                      <th
+                        key={c.key}
+                        onClick={() => handleSortBy(c.key)}
+                        style={{ cursor: 'pointer', userSelect: 'none', color: sortBy === c.key ? 'var(--hck-accent-lt)' : undefined }}
                       >
-                        <option value="">Sin género</option>
-                        {GENRES.map((g) => (
-                          <option key={g} value={g}>
-                            {CATEGORIES.find((c) => c.id === g)?.name ?? g}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="dim-cell">{FORMAT_LABEL[s.sourceFormat]}</div>
-                    <div>
-                      <span className="badge" style={{ ['--quality-color' as string]: QUALITY_COLOR[s.syncQuality] }}>
-                        {QUALITY_LABEL[s.syncQuality]}
-                      </span>
-                    </div>
-                    <div className="row-actions">
-                      <button
-                        className={`row-verify-btn${s.syncVerified ? ' is-verified' : ''}`}
-                        onClick={() => toggleSyncVerified(s)}
-                        title={
-                          s.syncVerified
-                            ? 'Sincronía verificada — click para desmarcar'
-                            : 'Marcar como sincronía verificada'
-                        }
-                      >
-                        ✓
-                      </button>
-                      <button className="row-play-btn" onClick={() => handlePlay(s.id)} disabled={isPlaying}>
-                        {isPlaying ? 'Reproduciendo' : '▶ Reproducir'}
-                      </button>
-                      <button
-                        className="row-queue-btn"
-                        onClick={() => openAddToQueue(s)}
-                        disabled={!session}
-                        title={session ? 'Agregar a la cola' : 'Iniciá una sesión primero'}
-                      >
-                        + Cola
-                      </button>
-                      <button
-                        className="row-queue-btn"
-                        onClick={() => {
-                          setAddToPlaylistSong(s)
-                          setPlaylistMessage(null)
-                        }}
-                        title="Agregar a una playlist"
-                      >
-                        + Playlist
-                      </button>
-                      {s.audioUrl && (
-                        <button className="row-resync-btn" onClick={() => openResync(s)} title="Re-sincronizar letra">
-                          ⟳
-                        </button>
-                      )}
-                      <button className="row-delete-btn" onClick={() => setDeleteSong(s)} title="Eliminar canción">
-                        🗑
-                      </button>
-                    </div>
-                  </div>
-                )
-              })}
+                        {c.label}
+                        <span style={{ display: 'inline-block', width: '14px', marginLeft: '3px', opacity: sortBy === c.key ? 1 : 0.25 }}>
+                          {sortBy === c.key ? (sortAsc ? '↑' : '↓') : '↑'}
+                        </span>
+                      </th>
+                    ))}
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {songs.map((s) => {
+                    const isPlaying = s.id === nowPlayingSong?.id
+                    return (
+                      <tr key={s.id} style={isPlaying ? { background: 'var(--hck-accent-06)' } : undefined}>
+                        <td className="hck-mono hck-faint">#{s.number}</td>
+                        <td>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                            <div style={{ width: '10px', height: '10px', borderRadius: '3px', flex: 'none', background: songColor(s.id) }} />
+                            <span style={{ fontWeight: 700 }}>{s.title}</span>
+                          </div>
+                        </td>
+                        <td className="hck-muted">{s.artist}</td>
+                        <td>
+                          <select
+                            className="hck-input"
+                            style={{ minHeight: '38px', padding: '6px 10px', fontSize: '14px', width: 'auto' }}
+                            value={s.genre ?? ''}
+                            onChange={(e) => handleSetGenre(s.id, (e.target.value || null) as Genre | null)}
+                            title="Género (para las categorías de Inicio)"
+                          >
+                            <option value="">Sin género</option>
+                            {GENRES.map((g) => (
+                              <option key={g} value={g}>
+                                {CATEGORIES.find((c) => c.id === g)?.name ?? g}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className="hck-muted">{FORMAT_LABEL[s.sourceFormat]}</td>
+                        <td>
+                          <span className="hck-tag" style={{ color: QUALITY_COLOR[s.syncQuality] }}>{QUALITY_LABEL[s.syncQuality]}</span>
+                          {s.syncVerified && <span className="hck-tag hck-tag-outline" style={{ marginLeft: '6px' }}>verificada</span>}
+                        </td>
+                        <td>
+                          <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                            <button
+                              className={`hck-btn hck-btn-icon${s.syncVerified ? ' hck-btn-on' : ''}`}
+                              onClick={() => toggleSyncVerified(s)}
+                              title={s.syncVerified ? 'Sincronía verificada — click para desmarcar' : 'Marcar como sincronía verificada'}
+                            >
+                              <Icon name="check" size={16} />
+                            </button>
+                            <button className="hck-btn hck-btn-icon" onClick={() => handlePlay(s.id)} disabled={isPlaying} title="Reproducir">
+                              <Icon name="play" size={16} />
+                            </button>
+                            <button
+                              className="hck-btn hck-btn-primary"
+                              onClick={() => openAddToQueue(s)}
+                              disabled={!session}
+                              title={session ? 'Agregar a la cola' : 'Iniciá una sesión primero'}
+                            >
+                              <Icon name="plus" size={15} /> Cola
+                            </button>
+                            <button
+                              className="hck-btn hck-btn-icon"
+                              onClick={() => {
+                                setAddToPlaylistSong(s)
+                                setPlaylistMessage(null)
+                              }}
+                              title="Agregar a una playlist"
+                            >
+                              <Icon name="playlist" size={16} />
+                            </button>
+                            {s.audioUrl && (
+                              <button className="hck-btn hck-btn-icon" onClick={() => openResync(s)} title="Re-sincronizar letra">
+                                <Icon name="refresh" size={16} />
+                              </button>
+                            )}
+                            <button className="hck-btn hck-btn-icon hck-btn-ghost" onClick={() => setDeleteSong(s)} title="Eliminar canción">
+                              <Icon name="trash" size={16} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
               {songs.length === 0 && !songsLoading && (
-                <div className="no-results">Ninguna canción coincide. Probá otra búsqueda o filtro.</div>
+                <p className="hck-muted" style={{ textAlign: 'center', padding: '40px' }}>Ninguna canción coincide. Probá otra búsqueda o filtro.</p>
               )}
             </div>
           )}
           {songs.length < songsTotal && (
-            <button className="btn-secondary" style={{ marginTop: '0.75rem' }} disabled={songsLoading} onClick={loadMoreSongs}>
+            <button className="hck-btn hck-btn-secondary" style={{ alignSelf: 'center' }} disabled={songsLoading} onClick={loadMoreSongs}>
               {songsLoading ? 'Cargando…' : `Cargar más (${songsTotal - songs.length} restantes)`}
             </button>
           )}
-          {playError && <p className="error">{playError}</p>}
-        </section>
+          {playError && <p style={{ color: '#F87171' }}>{playError}</p>}
+        </div>
+        )}
 
-        <section className={`page${page === 'playlists' ? ' active' : ''}`}>
-          <div className="stage-head">
+        {page === 'playlists' && (
+        <div className="hck-scope hck-enter" style={{ padding: 'clamp(24px,2.2vw,44px) clamp(24px,3vw,68px) 160px', display: 'flex', flexDirection: 'column', gap: 'clamp(24px,2.4vw,44px)' }}>
+          <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: '28px', flexWrap: 'wrap' }}>
             <div>
-              <h1>Playlists</h1>
-              <p>Listas armadas de antemano. Cargá una entera a la cola y arrancá la noche sin buscar tema por tema.</p>
+              <h2>Playlists</h2>
+              <p className="hck-muted" style={{ marginTop: '10px', fontSize: 'clamp(15px,1.1vw,19px)' }}>
+                Listas armadas de antemano. Cargá una entera a la cola y arrancá la noche sin buscar tema por tema.
+              </p>
             </div>
           </div>
 
-          <div className="panel">
-            <div className="field">
+          <div className="hck-card" style={{ gap: '14px' }}>
+            <div className="hck-field">
               <label>Nueva playlist</label>
-              <div className="import-add-row">
+              <div style={{ display: 'flex', gap: '12px' }}>
                 <input
+                  className="hck-input"
+                  style={{ flex: 1 }}
                   type="text"
                   placeholder="Ej: Arranque tranqui"
                   value={newPlaylistName}
                   onChange={(e) => setNewPlaylistName(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && createPlaylist()}
                 />
-                <button className="btn-primary" type="button" onClick={createPlaylist}>
+                <button className="hck-btn hck-btn-primary" type="button" onClick={createPlaylist}>
                   Crear
                 </button>
               </div>
             </div>
-            {playlistMessage && <p className="ok">{playlistMessage}</p>}
+            {playlistMessage && <p style={{ color: '#4ADE80', fontSize: '14px' }}>{playlistMessage}</p>}
           </div>
 
           {playlists.length === 0 ? (
-            <p className="hint">Todavía no hay playlists. Creá una y sumale canciones desde la Biblioteca.</p>
+            <p className="hck-muted">Todavía no hay playlists. Creá una y sumale canciones desde la Biblioteca.</p>
           ) : (
-            <div className="playlist-grid">
-              {playlists.map((p) => (
-                <div key={p.id} className={`playlist-card${openPlaylist?.id === p.id ? ' is-open' : ''}`}>
-                  <div className="playlist-card-head">
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(260px,1fr))', gap: 'clamp(16px,1.5vw,24px)' }}>
+              {playlists.map((p) => {
+                const isOpen = openPlaylist?.id === p.id
+                return (
+                  <div key={p.id} className="hck-card" style={{ gap: '14px', ...(isOpen ? { borderColor: 'var(--hck-accent)' } : {}) }}>
                     <div>
-                      <div className="playlist-name">{p.name}</div>
-                      <div className="hint">{p.songCount} canciones</div>
+                      <div style={{ fontSize: '19px', fontWeight: 700, letterSpacing: '-.02em' }}>{p.name}</div>
+                      <div className="hck-faint" style={{ fontSize: '14.5px' }}>{p.songCount} canciones</div>
                     </div>
-                  </div>
-                  <div className="playlist-card-actions">
-                    <button
-                      className="btn-primary"
-                      disabled={p.songCount === 0 || !session}
-                      title={session ? undefined : 'Iniciá una sesión primero'}
-                      onClick={() => {
-                        setPushPlaylist(p)
-                        setPushSingerId(null)
-                        setPushSingerName('')
-                        setPushSingerPhoto(null)
-                        setPushSingerOval(null)
-                      }}
-                    >
-                      Agregar a la sesión
-                    </button>
-                    <button
-                      className="btn-secondary"
-                      onClick={() => (openPlaylist?.id === p.id ? setOpenPlaylist(null) : showPlaylist(p.id))}
-                    >
-                      {openPlaylist?.id === p.id ? 'Cerrar' : 'Ver'}
-                    </button>
-                    <button className="btn-danger" onClick={() => deletePlaylist(p.id)}>
-                      Borrar
-                    </button>
-                  </div>
+                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                      <button
+                        className="hck-btn hck-btn-primary"
+                        disabled={p.songCount === 0 || !session}
+                        title={session ? undefined : 'Iniciá una sesión primero'}
+                        onClick={() => {
+                          setPushPlaylist(p)
+                          setPushSingerId(null)
+                          setPushSingerName('')
+                          setPushSingerPhoto(null)
+                          setPushSingerOval(null)
+                        }}
+                      >
+                        Agregar a la sesión
+                      </button>
+                      <button className="hck-btn hck-btn-secondary" onClick={() => (isOpen ? setOpenPlaylist(null) : showPlaylist(p.id))}>
+                        {isOpen ? 'Cerrar' : 'Ver'}
+                      </button>
+                      <button className="hck-btn hck-btn-ghost" onClick={() => deletePlaylist(p.id)}>
+                        <Icon name="trash" size={15} /> Borrar
+                      </button>
+                    </div>
 
-                  {openPlaylist?.id === p.id && (
-                    <div className="playlist-songs">
-                      {openPlaylist.songs.length === 0 ? (
-                        <p className="hint">Vacía. Agregale canciones con "+ Playlist" desde la Biblioteca.</p>
-                      ) : (
-                        openPlaylist.songs.map((s) => (
-                          <div key={s.id} className="playlist-song-row">
-                            <span className="song-swatch" style={{ background: songColor(s.id) }} />
-                            <span className="playlist-song-title">{s.title}</span>
-                            <span className="dim-cell">{s.artist}</span>
-                            <button
-                              className="row-delete-btn"
-                              onClick={() => removeSongFromPlaylist(p.id, s.id)}
-                              title="Quitar de la playlist"
-                            >
-                              ✕
-                            </button>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  )}
-                </div>
-              ))}
+                    {isOpen && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', paddingTop: '6px', borderTop: '1px solid var(--hck-line)' }}>
+                        {openPlaylist.songs.length === 0 ? (
+                          <p className="hck-muted" style={{ fontSize: '14px' }}>Vacía. Agregale canciones con "+ Playlist" desde la Biblioteca.</p>
+                        ) : (
+                          openPlaylist.songs.map((s) => (
+                            <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                              <span style={{ width: '8px', height: '8px', borderRadius: '3px', flex: 'none', background: songColor(s.id) }} />
+                              <span style={{ flex: 1, minWidth: 0, fontSize: '14.5px', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.title}</span>
+                              <span className="hck-faint" style={{ fontSize: '13.5px' }}>{s.artist}</span>
+                              <button
+                                className="hck-btn hck-btn-icon hck-btn-ghost"
+                                style={{ width: '30px', height: '30px' }}
+                                onClick={() => removeSongFromPlaylist(p.id, s.id)}
+                                title="Quitar de la playlist"
+                              >
+                                <Icon name="x" size={14} />
+                              </button>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
             </div>
           )}
-        </section>
+        </div>
+        )}
 
-        <section className={`page${page === 'cola' ? ' active' : ''}`}>
-          <div className="stage-head">
+        {page === 'cola' && (
+        <div className="hck-scope hck-enter" style={{ padding: 'clamp(24px,2.2vw,44px) clamp(24px,3vw,68px) 160px', display: 'flex', flexDirection: 'column', gap: 'clamp(24px,2.4vw,44px)' }}>
+          <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: '28px', flexWrap: 'wrap' }}>
             <div>
-              <h1>Sesión de Karaoke</h1>
-              <p>Quién canta qué, en qué orden, y quién va ganando.</p>
+              <h2>Sesión</h2>
+              <p className="hck-muted" style={{ marginTop: '10px', fontSize: 'clamp(15px,1.1vw,19px)' }}>Quién canta qué, en qué orden, y quién va ganando.</p>
             </div>
             {session && (
-              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+              <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
                 <button
-                  className={autoAdvance ? 'btn-primary' : 'btn-secondary'}
+                  className={`hck-btn ${autoAdvance ? 'hck-btn-on' : 'hck-btn-secondary'}`}
                   onClick={() => setAutoAdvance((v) => !v)}
                   title="Al terminar cada canción, pasar solo a la siguiente de la cola"
                 >
-                  Auto-avance {autoAdvance ? 'ON' : 'OFF'}
+                  Auto-avance {autoAdvance ? 'sí' : 'no'}
                 </button>
-                <button className="btn-secondary" onClick={() => setPage('playlists')}>
+                <button className="hck-btn hck-btn-secondary" onClick={() => setPage('playlists')}>
                   <Icon name="playlist" size={15} /> Agregar playlist
                 </button>
               </div>
@@ -2036,302 +2420,362 @@ export function App() {
           </div>
 
           {!session ? (
-            <div className="session-cta">
-              <Icon name="mic" size={28} />
-              <h2>No hay ninguna sesión activa</h2>
-              <p className="hint">
+            <div className="hck-stage hck-card" style={{ alignItems: 'center', textAlign: 'center', gap: '18px', padding: 'clamp(40px,5vw,70px)' }}>
+              {beams(3)}
+              <span style={{ color: 'var(--hck-accent-lt)' }}><Icon name="mic" size={40} /></span>
+              <h3>No hay ninguna sesión activa</h3>
+              <p className="hck-muted" style={{ maxWidth: '52ch' }}>
                 Una sesión agrupa a los cantantes de la noche, sus fotos, la cola de canciones y los puntajes.
                 Arrancá una y te guío para cargar al primero.
               </p>
-              <button className="btn-primary" onClick={handleStartSession}>
-                <Icon name="mic" size={15} /> Iniciar sesión de karaoke
+              <button className="hck-btn hck-btn-primary hck-btn-xl" onClick={handleStartSession}>
+                <Icon name="mic" size={17} /> Iniciar sesión de karaoke
               </button>
             </div>
           ) : (
             <>
           {session.status === 'armando' && !showWizard && (
-            <div className="session-armando-banner">
-              <div>
-                <strong>Estás armando la sesión</strong>
-                <div className="hint">El show todavía no arrancó — sumá cantantes y sus canciones.</div>
+            <div className="hck-card" style={{ flexDirection: 'row', alignItems: 'center', gap: '18px', borderColor: 'var(--hck-accent)' }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 700, fontSize: '17px' }}>Estás armando la sesión</div>
+                <div className="hck-muted" style={{ fontSize: '14.5px' }}>El show todavía no arrancó — sumá cantantes y sus canciones.</div>
               </div>
-              <button className="btn-primary" onClick={() => setShowWizard(true)}>
+              <button className="hck-btn hck-btn-primary" onClick={() => setShowWizard(true)}>
                 Seguir armando
               </button>
             </div>
           )}
 
-          <div className="singer-chip-row">
-            <span className="singer-chip-label">Cantantes</span>
-            {sessionSingers.map((s) => (
-              <div className="singer-chip" key={s.id}>
-                {s.photoUrl ? (
-                  <img className="singer-thumb" src={s.photoUrl} alt="" />
-                ) : (
-                  <span className="singer-chip-avatar">{s.name[0]?.toUpperCase()}</span>
-                )}
-                <span>{s.name}</span>
-                {s.photoUrl && <Icon name="camera" size={12} />}
-              </div>
-            ))}
-            {sessionSingers.length === 0 && <span className="hint">Todavía no hay ninguno.</span>}
-            <button
-              className="btn-ghost"
-              disabled={!session}
-              title={session ? undefined : 'Iniciá una sesión primero'}
-              onClick={() => setShowWizard(true)}
-            >
-              <Icon name="plus" size={14} /> Registrar cantante
-            </button>
-          </div>
-
-          <div className="queue-now-card">
-            <div className="queue-now-info">
-              {queue[0]?.status === 'playing' ? (
-                <>
-                  <div className="queue-now-label">Cantando ahora</div>
-                  <div className="queue-now-singer">
-                    {queue[0].singerPhotoUrl && <img className="singer-thumb" src={queue[0].singerPhotoUrl} alt="" />}
-                    {queue[0].singer}
-                  </div>
-                  <div className="queue-now-song">
-                    {queue[0].song.title} · {queue[0].song.artist}
-                  </div>
-                  {/* Puntaje en el momento — editable hasta "Siguiente", no
-                      hace falta esperar a que termine para calificar. */}
-                  <div className="score-buttons queue-now-score">
-                    {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
-                      <button
-                        key={n}
-                        className={`score-btn${queue[0].score === n ? ' is-active' : ''}`}
-                        onClick={() => handleScoreItem(queue[0].id, n)}
-                      >
-                        {n}
-                      </button>
-                    ))}
-                  </div>
-                </>
-              ) : (
-                <div className="queue-now-empty">Nadie está cantando todavía</div>
-              )}
-            </div>
-            <button
-              className="btn-primary"
-              onClick={handleAdvanceQueue}
-              disabled={queue.length === 0}
-            >
-              Siguiente ▶
-            </button>
-          </div>
-
-          {session && (
-            <div className="queue-panel facepanel">
-              <h2>
-                <Icon name="wand" size={16} /> Cara en el escenario
-              </h2>
-              {templates.length === 0 ? (
-                <p className="hint">
-                  Todavía no hay templates — subí uno desde Studio → Fun Box.
-                </p>
-              ) : (
-                <>
-                  <p className="hint">
-                    Con pantalla completa activa, apretá el número para mostrarlo sobre quien está cantando.
-                  </p>
-                  {faceswapProgress && faceswapProgress.ready < faceswapProgress.total && (
-                    <div className="facepanel-progress">
-                      <p className="hint">
-                        Preparando caras: {faceswapProgress.ready}/{faceswapProgress.total}
-                      </p>
-                      <div className="progress-track">
-                        <div
-                          className="progress-fill"
-                          style={{ width: `${(faceswapProgress.ready / faceswapProgress.total) * 100}%` }}
-                        />
-                      </div>
-                    </div>
-                  )}
-                  {queue[0]?.status === 'playing' && !queue[0].singerPhotoUrl && (
-                    <p className="hint facepanel-nophoto">
-                      {queue[0].singer} no tiene foto cargada — el hotkey no va a mostrar nada hasta que le carguen una.
-                    </p>
-                  )}
-                  <div className="facepanel-grid">
-                    {templates.slice(0, 9).map((t, i) => {
-                      const playingSingerId = queue[0]?.status === 'playing' ? queue[0].singerId : undefined
-                      const status = t.kind === 'faceswap' && playingSingerId ? faceswapStatus[playingSingerId]?.[t.id] : undefined
-                      const notReady = t.kind === 'faceswap' && status !== 'ready'
-                      const disabled = !kioskMode || notReady
-                      const title = !kioskMode
-                        ? 'Solo funciona con pantalla completa activa'
-                        : notReady
-                          ? status === 'failed'
-                            ? 'No se pudo generar el swap para este cantante'
-                            : 'Preparando el swap para este cantante…'
-                          : undefined
-                      return (
-                        <button
-                          key={t.id}
-                          type="button"
-                          className="facepanel-card"
-                          disabled={disabled}
-                          title={title}
-                          onClick={() => triggerFaceSwap(t)}
-                        >
-                          <span className="tag tag-accent facepanel-key">{i + 1}</span>
-                          <video src={t.videoUrl} muted loop autoPlay playsInline />
-                          {notReady && (
-                            <span className={`facepanel-status${status === 'failed' ? ' facepanel-status-error' : ''}`}>
-                              {status === 'failed' ? 'Error' : 'Preparando…'}
-                            </span>
-                          )}
-                        </button>
-                      )
-                    })}
-                  </div>
-                </>
-              )}
-            </div>
-          )}
-
-          <div className="queue-columns">
-            <div className="queue-panel">
-              <div className="queue-panel-head">
-                <h2>Próximos en la cola</h2>
-                <button
-                  className="btn-ghost"
-                  disabled={queue.filter((q) => q.status === 'queued').length < 2}
-                  title="Reparte lo que falta cantar alternando entre cantantes"
-                  onClick={handleInterleaveQueue}
-                >
-                  <Icon name="sync" size={13} /> Alternar turnos
+          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1.25fr)', gap: 'clamp(20px,2vw,36px)', alignItems: 'start' }}>
+            <div className="hck-card" style={{ gap: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: '12px' }}>
+                <span className="hck-kicker">Cantantes</span>
+                <button className="hck-btn hck-btn-ghost" style={{ marginLeft: 'auto' }} onClick={() => setShowWizard(true)}>
+                  <Icon name="plus" size={14} /> Registrar cantante
                 </button>
               </div>
-              {queue.filter((q) => q.status === 'queued').length === 0 ? (
-                <p className="hint">No hay nadie en espera — agregá cantantes desde la Biblioteca ("+ Cola").</p>
+              {sessionSingers.length === 0 ? (
+                <p className="hck-muted" style={{ fontSize: '14.5px' }}>Todavía no hay ninguno.</p>
               ) : (
-                <div className="queue-list">
-                  {queue
-                    .filter((q) => q.status === 'queued')
-                    .map((item, i, arr) => (
-                      <div className="queue-row" key={item.id}>
-                        <div className="queue-row-position">{i + 1}</div>
-                        <div className="queue-row-info">
-                          <div className="queue-row-singer">
-                            {item.singerPhotoUrl && <img className="singer-thumb" src={item.singerPhotoUrl} alt="" />}
-                            {item.singer}
-                          </div>
-                          <div className="queue-row-song">
-                            {item.song.title} · {item.song.artist}
-                          </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  {sessionSingers.map((s) => (
+                    <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '10px 14px', borderRadius: 'var(--hck-r-md)', background: 'var(--hck-surface-2)' }}>
+                      {s.photoUrl ? (
+                        <img src={s.photoUrl} alt="" style={{ width: '44px', height: '44px', borderRadius: '50%', objectFit: 'cover', flex: 'none' }} />
+                      ) : (
+                        <span style={{ width: '44px', height: '44px', flex: 'none', borderRadius: '50%', display: 'grid', placeItems: 'center', fontSize: '17px', fontWeight: 700, background: 'var(--hck-surface-3)' }}>
+                          {s.name[0]?.toUpperCase()}
+                        </span>
+                      )}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 700, fontSize: '17px', letterSpacing: '-.02em' }}>{s.name}</div>
+                        <div className="hck-faint" style={{ fontSize: '13.5px' }}>
+                          {s.photoUrl ? 'con foto' : 'sin foto'} · {songCounts[s.id] ?? 0} canción{(songCounts[s.id] ?? 0) === 1 ? '' : 'es'}
                         </div>
-                        <div className="queue-row-actions">
-                          <button
-                            className="queue-move-btn"
-                            onClick={() => handleMoveQueueItem(item.id, 'up')}
-                            disabled={i === 0}
-                            aria-label="Subir"
-                          >
-                            ▲
-                          </button>
-                          <button
-                            className="queue-move-btn"
-                            onClick={() => handleMoveQueueItem(item.id, 'down')}
-                            disabled={i === arr.length - 1}
-                            aria-label="Bajar"
-                          >
-                            ▼
-                          </button>
-                          <button className="queue-remove-btn" onClick={() => handleRemoveFromQueue(item.id)}>
-                            Quitar
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                </div>
-              )}
-            </div>
-
-            <div className="queue-panel">
-              <h2>Falta puntuar</h2>
-              {unscored.length === 0 ? (
-                <p className="hint">Nada pendiente de puntaje.</p>
-              ) : (
-                <div className="queue-list">
-                  {unscored.map((item) => (
-                    <div className="queue-row" key={item.id}>
-                      <div className="queue-row-info">
-                        <div className="queue-row-singer">
-                          {item.singerPhotoUrl && <img className="singer-thumb" src={item.singerPhotoUrl} alt="" />}
-                          {item.singer}
-                        </div>
-                        <div className="queue-row-song">
-                          {item.song.title} · {item.song.artist}
-                        </div>
-                      </div>
-                      <div className="score-buttons">
-                        {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
-                          <button key={n} className="score-btn" onClick={() => handleScoreItem(item.id, n)}>
-                            {n}
-                          </button>
-                        ))}
                       </div>
                     </div>
                   ))}
                 </div>
               )}
             </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 'clamp(18px,1.8vw,28px)' }}>
+              <div className="hck-card hck-card-hi hck-stage" style={{ gap: '16px' }}>
+                {beams(2)}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '22px', flexWrap: 'wrap' }}>
+                  <div style={{ flex: 1, minWidth: '260px' }}>
+                    {queue[0]?.status === 'playing' ? (
+                      <>
+                        <span className="hck-kicker">Cantando ahora</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '4px' }}>
+                          {queue[0].singerPhotoUrl && <img src={queue[0].singerPhotoUrl} alt="" style={{ width: '44px', height: '44px', borderRadius: '50%', objectFit: 'cover', border: '2px solid var(--hck-accent)' }} />}
+                          <span style={{ fontSize: 'clamp(22px,1.9vw,32px)', fontWeight: 800, letterSpacing: '-.03em' }}>{queue[0].singer}</span>
+                        </div>
+                        <div className="hck-muted" style={{ fontSize: '16px', marginTop: '4px' }}>{queue[0].song.title} · {queue[0].song.artist}</div>
+                        {/* Puntaje en el momento — editable hasta "Siguiente", no
+                            hace falta esperar a que termine para calificar. */}
+                        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '14px' }}>
+                          {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
+                            <button
+                              key={n}
+                              className={`hck-btn hck-btn-icon${queue[0].score === n ? ' hck-btn-on' : ''}`}
+                              style={{ width: '38px', height: '38px' }}
+                              onClick={() => handleScoreItem(queue[0].id, n)}
+                            >
+                              {n}
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    ) : (
+                      <div className="hck-muted" style={{ fontSize: '19px' }}>Nadie está cantando todavía</div>
+                    )}
+                  </div>
+                  <button className="hck-btn hck-btn-primary hck-btn-lg" onClick={handleAdvanceQueue} disabled={queue.length === 0}>
+                    Siguiente <Icon name="chevR" size={17} />
+                  </button>
+                </div>
+              </div>
+
+              <div className="hck-card" style={{ gap: '14px' }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: '14px' }}>
+                  <h4>En espera</h4>
+                  <span className="hck-faint" style={{ fontSize: '14.5px' }}>{queue.filter((q) => q.status === 'queued').length} turnos</span>
+                  <button
+                    className="hck-btn hck-btn-ghost"
+                    style={{ marginLeft: 'auto' }}
+                    disabled={queue.filter((q) => q.status === 'queued').length < 2}
+                    title="Reparte lo que falta cantar alternando entre cantantes"
+                    onClick={handleInterleaveQueue}
+                  >
+                    <Icon name="sync" size={13} /> Alternar turnos
+                  </button>
+                </div>
+                {queue.filter((q) => q.status === 'queued').length === 0 ? (
+                  <p className="hck-muted" style={{ fontSize: '14.5px' }}>No hay nadie en espera — agregá cantantes desde la Biblioteca ("+ Cola").</p>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {queue
+                      .filter((q) => q.status === 'queued')
+                      .map((item, i, arr) => (
+                        <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '10px 12px', borderRadius: 'var(--hck-r-md)', background: 'var(--hck-surface-2)' }}>
+                          <span className="hck-mono hck-faint" style={{ width: '20px', textAlign: 'center', fontWeight: 700 }}>{i + 1}</span>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 700, fontSize: '15.5px' }}>
+                              {item.singerPhotoUrl && <img src={item.singerPhotoUrl} alt="" style={{ width: '22px', height: '22px', borderRadius: '50%', objectFit: 'cover' }} />}
+                              {item.singer}
+                            </div>
+                            <div className="hck-muted" style={{ fontSize: '13.5px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              {item.song.title} · {item.song.artist}
+                            </div>
+                          </div>
+                          <div style={{ display: 'flex', gap: '4px' }}>
+                            <button className="hck-btn hck-btn-icon hck-btn-ghost" style={{ width: '32px', height: '32px' }} onClick={() => handleMoveQueueItem(item.id, 'up')} disabled={i === 0} aria-label="Subir">
+                              <Icon name="up" size={14} />
+                            </button>
+                            <button className="hck-btn hck-btn-icon hck-btn-ghost" style={{ width: '32px', height: '32px' }} onClick={() => handleMoveQueueItem(item.id, 'down')} disabled={i === arr.length - 1} aria-label="Bajar">
+                              <Icon name="down" size={14} />
+                            </button>
+                            <button className="hck-btn hck-btn-ghost" onClick={() => handleRemoveFromQueue(item.id)}>Quitar</button>
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                )}
+              </div>
+
+              {unscored.length > 0 && (
+                <div className="hck-card" style={{ gap: '14px', borderColor: 'var(--hck-accent)' }}>
+                  <h4>Falta puntuar</h4>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {unscored.map((item) => (
+                      <div key={item.id} style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '10px 12px', borderRadius: 'var(--hck-r-md)', background: 'var(--hck-surface-2)' }}>
+                        <div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 700, fontSize: '15.5px' }}>
+                            {item.singerPhotoUrl && <img src={item.singerPhotoUrl} alt="" style={{ width: '22px', height: '22px', borderRadius: '50%', objectFit: 'cover' }} />}
+                            {item.singer}
+                          </div>
+                          <div className="hck-muted" style={{ fontSize: '13.5px' }}>{item.song.title} · {item.song.artist}</div>
+                        </div>
+                        <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
+                          {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
+                            <button key={n} className="hck-btn hck-btn-icon" style={{ width: '32px', height: '32px', fontSize: '13px' }} onClick={() => handleScoreItem(item.id, n)}>
+                              {n}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
+
+          <div className="hck-card" style={{ gap: '16px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <h4><Icon name="wand" size={16} /> Cara en el escenario</h4>
+              <button className="hck-btn hck-btn-ghost" style={{ marginLeft: 'auto' }} onClick={() => setPage('funbox')}>
+                Administrar en Fun Box <Icon name="chevR" size={13} />
+              </button>
+            </div>
+            {templates.length === 0 ? (
+              <p className="hck-muted">Todavía no hay templates — subí uno desde Studio → Fun Box.</p>
+            ) : (
+              <>
+                <p className="hck-muted" style={{ fontSize: '14.5px' }}>
+                  Con pantalla completa activa, apretá el número para mostrarlo sobre quien está cantando.
+                </p>
+                {faceswapProgress && faceswapProgress.ready < faceswapProgress.total && (
+                  <div>
+                    <p className="hck-faint" style={{ fontSize: '13.5px', marginBottom: '6px' }}>
+                      Preparando caras: {faceswapProgress.ready}/{faceswapProgress.total}
+                    </p>
+                    <div className="hck-jobbar">
+                      <i style={{ width: `${(faceswapProgress.ready / faceswapProgress.total) * 100}%` }} />
+                    </div>
+                  </div>
+                )}
+                {queue[0]?.status === 'playing' && !queue[0].singerPhotoUrl && (
+                  <p className="hck-faint" style={{ fontSize: '13.5px' }}>
+                    {queue[0].singer} no tiene foto cargada — el hotkey no va a mostrar nada hasta que le carguen una.
+                  </p>
+                )}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(150px,1fr))', gap: '12px' }}>
+                  {templatesByHotkey.map((t) => {
+                    const playingSingerId = queue[0]?.status === 'playing' ? queue[0].singerId : undefined
+                    const status = t.kind === 'faceswap' && playingSingerId ? faceswapStatus[playingSingerId]?.[t.id] : undefined
+                    const notReady = t.kind === 'faceswap' && status !== 'ready'
+                    // Fuera de pantalla completa el hotkey no dispara nada real
+                    // — en vez de dejar la tarjeta muerta, click lleva a Fun Box
+                    // (REQ-13). Adentro, sigue disparando como siempre.
+                    const disabled = kioskMode && notReady
+                    const title = !kioskMode
+                      ? 'Ir a Fun Box'
+                      : notReady
+                        ? status === 'failed'
+                          ? 'No se pudo generar el swap para este cantante'
+                          : 'Preparando el swap para este cantante…'
+                        : undefined
+                    return (
+                      <button
+                        key={t.id}
+                        type="button"
+                        disabled={disabled}
+                        title={title}
+                        onClick={() => (kioskMode ? triggerFaceSwap(t) : setPage('funbox'))}
+                        style={{
+                          all: 'unset',
+                          cursor: disabled ? 'not-allowed' : 'pointer',
+                          position: 'relative',
+                          aspectRatio: '16/10',
+                          borderRadius: 'var(--hck-r-md)',
+                          overflow: 'hidden',
+                          border: '1px solid var(--hck-line)',
+                          opacity: disabled ? 0.5 : 1,
+                        }}
+                      >
+                        <span className={`hck-tag ${t.hotkey != null ? 'hck-tag-accent' : 'hck-tag-outline'}`} style={{ position: 'absolute', left: '8px', top: '8px', zIndex: 2, fontSize: '11.5px', padding: '3px 9px' }}>
+                          {t.hotkey ?? 'sin tecla'}
+                        </span>
+                        <video src={t.videoUrl} muted loop autoPlay playsInline style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                        {notReady && (
+                          <span
+                            className="hck-tag"
+                            style={{ position: 'absolute', right: '8px', bottom: '8px', zIndex: 2, background: status === 'failed' ? '#7F1D1D' : 'var(--hck-surface-3)' }}
+                          >
+                            {status === 'failed' ? 'Error' : 'Preparando…'}
+                          </span>
+                        )}
+                      </button>
+                    )
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+
+          {leaderboard.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: '16px' }}>
+                <h3>Ranking de la noche</h3>
+                <span className="hck-faint" style={{ fontSize: '14.5px' }}>Puntaje de 1 a 10 por canción</span>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 'clamp(14px,1.4vw,24px)' }}>
+                {[...leaderboard]
+                  .sort((a, b) => b.totalScore - a.totalScore)
+                  .slice(0, 3)
+                  .map((l, i) => (
+                    <div
+                      key={l.singerId}
+                      className={`hck-card hck-stage${i === 0 ? ' hck-card-hi' : ''}`}
+                      style={{ alignItems: 'center', textAlign: 'center', gap: '12px', padding: 'clamp(20px,2vw,30px)' }}
+                    >
+                      {i === 0 && beams(2)}
+                      <div style={{ fontSize: 'clamp(32px,3.4vw,54px)', fontWeight: 800, letterSpacing: '-.05em', color: i === 0 ? 'var(--hck-accent-lt)' : 'var(--hck-faint)' }}>
+                        {i + 1}
+                      </div>
+                      {l.singerPhotoUrl ? (
+                        <img src={l.singerPhotoUrl} alt="" style={{ width: '56px', height: '56px', borderRadius: '50%', objectFit: 'cover' }} />
+                      ) : (
+                        <span style={{ width: '56px', height: '56px', borderRadius: '50%', display: 'grid', placeItems: 'center', fontSize: '20px', fontWeight: 700, background: 'var(--hck-surface-3)' }}>
+                          {l.singer[0]?.toUpperCase()}
+                        </span>
+                      )}
+                      <div style={{ fontSize: '18px', fontWeight: 700, letterSpacing: '-.02em' }}>{l.singer}</div>
+                      <div className="hck-mono" style={{ fontSize: '22px', fontWeight: 800 }}>{l.totalScore}</div>
+                      <div className="hck-faint" style={{ fontSize: '13px' }}>{l.songsScored} canción{l.songsScored === 1 ? '' : 'es'}</div>
+                    </div>
+                  ))}
+              </div>
+              <table className="hck-table">
+                <thead>
+                  <tr>
+                    <th style={{ width: '60px' }}>#</th>
+                    <th>Cantante</th>
+                    <th>Canciones</th>
+                    <th>Puntos</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...leaderboard]
+                    .sort((a, b) => b.totalScore - a.totalScore)
+                    .map((l, i) => (
+                      <tr key={l.singerId}>
+                        <td className="hck-mono">{i + 1}</td>
+                        <td>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                            {l.singerPhotoUrl ? (
+                              <img src={l.singerPhotoUrl} alt="" style={{ width: '30px', height: '30px', borderRadius: '50%', objectFit: 'cover' }} />
+                            ) : (
+                              <span style={{ width: '30px', height: '30px', borderRadius: '50%', display: 'grid', placeItems: 'center', fontSize: '13px', fontWeight: 700, background: 'var(--hck-surface-3)' }}>
+                                {l.singer[0]?.toUpperCase()}
+                              </span>
+                            )}
+                            <span style={{ fontWeight: 600 }}>{l.singer}</span>
+                          </div>
+                        </td>
+                        <td className="hck-muted">{l.songsScored}</td>
+                        <td className="hck-mono" style={{ fontWeight: 700 }}>{l.totalScore}</td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
+          )}
 
             </>
           )}
-        </section>
+        </div>
+        )}
 
-        <section className={`page${page === 'studio' ? ' active' : ''}`}>
-          <div className="stage-head">
-            <div>
-              <h1>Studio</h1>
-              <p>Herramientas para armar y curar el material del kiosco.</p>
-            </div>
+        {page === 'studio' && (
+        <div className="hck-scope hck-enter" style={{ padding: 'clamp(24px,2.2vw,44px) clamp(24px,3vw,68px) 160px', display: 'flex', flexDirection: 'column', gap: 'clamp(24px,2.4vw,44px)' }}>
+          <div>
+            <h2>Studio</h2>
+            <p className="hck-muted" style={{ marginTop: '10px', fontSize: 'clamp(15px,1.1vw,19px)' }}>Herramientas para armar y curar el material del kiosco.</p>
           </div>
-          <div className="playlist-grid">
-            <div className="card hub-card" onClick={() => setPage('generar')}>
-              <Icon name="wand" size={22} />
-              <div className="card-title">Crear canción en la biblioteca</div>
-              <div className="card-body">Subís audio + letra pegada y se sincroniza sola con WhisperX.</div>
-            </div>
-            <div className="card hub-card" onClick={() => setPage('subir')}>
-              <Icon name="upload" size={22} />
-              <div className="card-title">Subir canción a la biblioteca</div>
-              <div className="card-body">Para karaoke ya armado — LRC, JSON propio, CD+G o video con letra quemada.</div>
-            </div>
-            <div className="card hub-card" onClick={() => setPage('fondo')}>
-              <Icon name="film" size={22} />
-              <div className="card-title">Fondo de video</div>
-              <div className="card-body">El video de fondo detrás de la letra en pantalla completa.</div>
-            </div>
-            <div className="card hub-card" onClick={() => setPage('funbox')}>
-              <Icon name="star" size={22} />
-              <div className="card-title">Fun Box</div>
-              <div className="card-body">Pack de templates para la animación de cara en el escenario — subí un video y se mapea solo.</div>
-            </div>
-            <div className="card hub-card" onClick={() => window.location.assign('/template-editor')}>
-              <Icon name="grid" size={22} />
-              <div className="card-title">Editor de templates</div>
-              <div className="card-body">Marcá a mano el "slot" de cara sobre un video, para templates sin mapeo automático.</div>
-            </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(clamp(260px,22vw,340px),1fr))', gap: 'clamp(16px,1.6vw,26px)' }}>
+            {hubCard('wand', 'Crear canción en la biblioteca', 'Subís audio + letra pegada y se sincroniza sola con WhisperX.', () => setPage('generar'))}
+            {hubCard('upload', 'Subir canción a la biblioteca', 'Para karaoke ya armado — LRC, JSON propio, CD+G o video con letra quemada.', () => setPage('subir'))}
+            {hubCard('film', 'Fondo de video', 'El video de fondo detrás de la letra en pantalla completa.', () => setPage('fondo'))}
+            {hubCard('star', 'Fun Box', 'Pack de templates para la animación de cara en el escenario — subí un video y se mapea solo.', () => setPage('funbox'))}
+            {hubCard('grid', 'Editor de templates', 'Marcá a mano el "slot" de cara sobre un video, para templates sin mapeo automático.', () => window.location.assign('/template-editor'))}
           </div>
-        </section>
+        </div>
+        )}
 
-        <section className={`page${page === 'generar' ? ' active' : ''}`}>
-          <div className="stage-head">
-            <div>
-              <h1>Agregar canción nueva</h1>
-              <p>En cuatro pasos, tu próxima estrella tendrá una canción más para brillar.</p>
-            </div>
+        {page === 'generar' && (
+        <div className="hck-scope hck-enter" style={{ padding: 'clamp(24px,2.2vw,44px) clamp(24px,3vw,68px) 160px', display: 'flex', flexDirection: 'column', gap: 'clamp(24px,2.4vw,44px)' }}>
+          <button className="hck-btn hck-btn-ghost" style={{ alignSelf: 'flex-start' }} onClick={() => setPage('studio')}>
+            <Icon name="chevL" size={15} /> Studio
+          </button>
+          <div>
+            <h2>Agregar canción nueva</h2>
+            <p className="hck-muted" style={{ marginTop: '10px', fontSize: 'clamp(15px,1.1vw,19px)' }}>En cuatro pasos, tu próxima estrella tendrá una canción más para brillar.</p>
           </div>
 
-          <div className="wizard-steps">
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,minmax(0,1fr))', gap: 'clamp(10px,1vw,20px)' }}>
             {(
               [
                 [1, 'Subir audio'],
@@ -2339,57 +2783,60 @@ export function App() {
                 [3, 'Sincronizar'],
                 [4, 'Guardar'],
               ] as const
-            ).map(([n, label], i) => (
-              <div className="wizard-step-wrap" key={n}>
-                {i > 0 && <div className="wizard-connector" />}
-                <div className={`wizard-step${wizardStep === n ? ' is-active' : ''}${wizardStep > n ? ' is-done' : ''}`}>
-                  <div className="wizard-step-circle">{n}</div>
-                  <span className="wizard-step-label">{label}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div className="panel wizard-panel">
-            {wizardStep === 1 && (
-              <div>
-                <div className="field">
-                  <label>Título</label>
-                  <input type="text" value={wizardTitle} onChange={(e) => setWizardTitle(e.target.value)} />
-                </div>
-                <div className="field">
-                  <label>Artista</label>
-                  <input type="text" value={wizardArtist} onChange={(e) => setWizardArtist(e.target.value)} />
-                </div>
-                <div className="field">
-                  <label>Idioma de la letra</label>
-                  <select value={wizardLanguage} onChange={(e) => setWizardLanguage(e.target.value)}>
-                    {LANGUAGE_OPTIONS.map((opt) => (
-                      <option key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
-                  <div className="hint">
-                    El modelo de alineación es específico por idioma — si no coincide con lo que se canta, la letra
-                    sincroniza mal en toda la canción.
+            ).map(([n, label]) => {
+              const done = wizardStep > n
+              const cur = wizardStep === n
+              return (
+                <div key={n} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  <div style={{ height: '5px', borderRadius: '99px', background: cur || done ? 'var(--hck-accent)' : 'var(--hck-surface-3)', boxShadow: cur ? 'var(--hck-glow)' : 'none' }} />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', opacity: cur ? 1 : 0.5 }}>
+                    <span style={{ width: '28px', height: '28px', flex: 'none', borderRadius: '50%', display: 'grid', placeItems: 'center', fontSize: '14px', fontWeight: 700, border: `1.5px solid ${cur || done ? 'var(--hck-accent)' : 'var(--hck-line-2)'}`, color: cur || done ? 'var(--hck-accent-lt)' : 'inherit' }}>
+                      {done ? '✓' : n}
+                    </span>
+                    <span style={{ fontWeight: 600, fontSize: '16px' }}>{label}</span>
                   </div>
                 </div>
+              )
+            })}
+          </div>
 
-                <label className="checkbox-field">
-                  <input
-                    type="checkbox"
-                    checked={wizardSeparateVocals}
-                    onChange={(e) => setWizardSeparateVocals(e.target.checked)}
-                  />
-                  <span>
+          <div className="hck-card" style={{ gap: '20px' }}>
+            {wizardStep === 1 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
+                <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
+                  <div className="hck-field" style={{ flex: 1, minWidth: '220px' }}>
+                    <label>Título</label>
+                    <input className="hck-input" type="text" value={wizardTitle} onChange={(e) => setWizardTitle(e.target.value)} />
+                  </div>
+                  <div className="hck-field" style={{ flex: 1, minWidth: '220px' }}>
+                    <label>Artista</label>
+                    <input className="hck-input" type="text" value={wizardArtist} onChange={(e) => setWizardArtist(e.target.value)} />
+                  </div>
+                </div>
+                <div className="hck-field">
+                  <label>Idioma de la letra</label>
+                  <select className="hck-input" value={wizardLanguage} onChange={(e) => setWizardLanguage(e.target.value)}>
+                    {LANGUAGE_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
+                  <p className="hck-faint" style={{ fontSize: '13.5px', marginTop: '8px' }}>
+                    El modelo de alineación es específico por idioma — si no coincide con lo que se canta, la letra
+                    sincroniza mal en toda la canción.
+                  </p>
+                </div>
+
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={wizardSeparateVocals} onChange={(e) => setWizardSeparateVocals(e.target.checked)} style={{ marginTop: '4px', accentColor: 'var(--hck-accent)' }} />
+                  <span style={{ fontSize: '15px' }}>
                     Separar voz del instrumental antes de sincronizar (Demucs)
-                    <span className="hint"> — mejor precisión con mucha base instrumental, tarda más.</span>
+                    <span className="hck-faint"> — mejor precisión con mucha base instrumental, tarda más.</span>
                   </span>
                 </label>
 
                 <div
-                  className={`dropzone${wizardDragOver ? ' is-over' : ''}`}
+                  className="hck-dropzone"
+                  style={wizardDragOver ? { borderColor: 'var(--hck-accent)' } : undefined}
                   onDragOver={(e) => {
                     e.preventDefault()
                     setWizardDragOver(true)
@@ -2398,67 +2845,54 @@ export function App() {
                   onDrop={handleDropAudio}
                   onClick={() => audioFileInputRef.current?.click()}
                 >
-                  <div className="dropzone-icon">MP3</div>
-                  <div className="dropzone-title">Arrastrá el archivo acá</div>
-                  <div className="dropzone-sub">o hacé clic para buscarlo en tu equipo</div>
-                  {wizardAudioFile && <div className="dropzone-file">{wizardAudioFile.name}</div>}
-                  <input
-                    ref={audioFileInputRef}
-                    type="file"
-                    accept=".mp3,.mp4,.ogg,.wav,.webm"
-                    hidden
-                    onChange={handleBrowseAudio}
-                  />
+                  <span className="hck-ico"><Icon name="upload" size={44} w={2.2} /></span>
+                  <div style={{ fontSize: '21px', fontWeight: 700, letterSpacing: '-.02em' }}>Arrastrá el archivo acá</div>
+                  <div className="hck-muted">o hacé clic para buscarlo en tu equipo</div>
+                  {wizardAudioFile && <div className="hck-tag hck-tag-accent">{wizardAudioFile.name}</div>}
+                  <input ref={audioFileInputRef} type="file" accept=".mp3,.mp4,.ogg,.wav,.webm" hidden onChange={handleBrowseAudio} />
                 </div>
 
-                <div className="step-actions">
-                  <button className="btn-primary" disabled={!wizardAudioFile} onClick={() => setWizardStep(2)}>
-                    Continuar
-                  </button>
+                <div style={{ display: 'flex', gap: '14px' }}>
+                  <button className="hck-btn hck-btn-primary hck-btn-lg" disabled={!wizardAudioFile} onClick={() => setWizardStep(2)}>Continuar</button>
                 </div>
               </div>
             )}
 
             {wizardStep === 2 && (
-              <div>
-                <div className="field">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
+                <div className="hck-field">
                   <label>Pegá la letra completa, una línea por renglón</label>
                   <textarea
+                    className="hck-input"
                     rows={10}
                     value={wizardLyricsText}
                     onChange={(e) => setWizardLyricsText(e.target.value)}
                     placeholder={'Bajo las luces se enciende tu voz\ny esta noche el escenario es tuyo...'}
                   />
-                  <div className="hint">No la pegues como un solo párrafo — hacen falta los saltos de línea reales.</div>
+                  <p className="hck-faint" style={{ fontSize: '13.5px', marginTop: '8px' }}>No la pegues como un solo párrafo — hacen falta los saltos de línea reales.</p>
                 </div>
-                <div className="step-actions">
-                  <button className="btn-secondary" onClick={() => setWizardStep(1)}>
-                    Atrás
-                  </button>
-                  <button className="btn-primary" disabled={!wizardLyricsText.trim()} onClick={() => setWizardStep(3)}>
-                    Continuar
-                  </button>
+                <div style={{ display: 'flex', gap: '14px' }}>
+                  <button className="hck-btn hck-btn-secondary hck-btn-lg" onClick={() => setWizardStep(1)}>Atrás</button>
+                  <button className="hck-btn hck-btn-primary hck-btn-lg" disabled={!wizardLyricsText.trim()} onClick={() => setWizardStep(3)}>Continuar</button>
                 </div>
               </div>
             )}
 
             {wizardStep === 3 && (
-              <div>
-                <div className="hint" style={{ marginBottom: '1rem' }}>
-                  Sincronizá la letra con el audio para un karaoke perfecto.
+              <div className="hck-stage" style={{ display: 'flex', flexDirection: 'column', gap: '18px', padding: 'clamp(20px,2vw,32px)', borderRadius: 'var(--hck-r-lg)', background: 'var(--hck-surface-2)' }}>
+                {syncing && beams(3)}
+                <p className="hck-muted">Sincronizá la letra con el audio para un karaoke perfecto.</p>
+                <div className={syncing ? 'hck-jobbar hck-jobbar-idle' : 'hck-jobbar'}>
+                  {!syncing && <i style={{ width: '0%' }} />}
+                  {syncing && <i />}
                 </div>
-                <div className="progress-track">
-                  <div className={`progress-fill${syncing ? ' is-indeterminate' : ''}`} style={{ width: syncing ? '40%' : '0%' }} />
-                </div>
-                <div className="hint" style={{ marginTop: '0.5rem' }}>
+                <p className="hck-muted" style={{ fontSize: '15px' }}>
                   {syncing ? 'Analizando el audio y ajustando tiempos… (puede tardar unos minutos)' : 'Presioná Sincronizar para comenzar.'}
-                </div>
-                {syncError && <p className="error">{syncError}</p>}
-                <div className="step-actions">
-                  <button className="btn-secondary" disabled={syncing} onClick={() => setWizardStep(2)}>
-                    Atrás
-                  </button>
-                  <button className="btn-primary" disabled={syncing} onClick={submitWizardSync}>
+                </p>
+                {syncError && <p style={{ color: '#F87171' }}>{syncError}</p>}
+                <div style={{ display: 'flex', gap: '14px' }}>
+                  <button className="hck-btn hck-btn-secondary hck-btn-lg" disabled={syncing} onClick={() => setWizardStep(2)}>Atrás</button>
+                  <button className="hck-btn hck-btn-primary hck-btn-lg" disabled={syncing} onClick={submitWizardSync}>
                     {syncing ? 'Sincronizando…' : 'Sincronizar'}
                   </button>
                 </div>
@@ -2466,471 +2900,251 @@ export function App() {
             )}
 
             {wizardStep === 4 && (
-              <div className="wizard-done">
-                <div className="wizard-done-icon">✓</div>
-                <div className="wizard-done-title">Todo listo para brillar</div>
-                <div className="hint">{syncMessage ?? 'La canción quedará disponible en tu biblioteca.'}</div>
-                <button className="btn-primary" onClick={finishWizard}>
-                  Ir a la biblioteca
-                </button>
+              <div className="hck-stage" style={{ alignItems: 'flex-start', gap: '20px', padding: 'clamp(30px,3vw,56px)' }}>
+                {beams(4)}
+                <span style={{ color: 'var(--hck-accent-lt)' }}><Icon name="check" size={44} w={2.2} /></span>
+                <h3>Todo listo para brillar</h3>
+                <p className="hck-muted" style={{ fontSize: '17px', maxWidth: '56ch' }}>{syncMessage ?? 'La canción quedará disponible en tu biblioteca.'}</p>
+                <button className="hck-btn hck-btn-primary hck-btn-lg" onClick={finishWizard}>Ir a la biblioteca</button>
               </div>
             )}
           </div>
-        </section>
+        </div>
+        )}
 
-        <section className={`page${page === 'subir' ? ' active' : ''}`}>
-          <div className="stage-head">
-            <div>
-              <h1>Subir canción armada</h1>
-              <p>Para cuando ya tenés un karaoke armado — LRC, JSON propio, CD+G o un video con letra quemada.</p>
-            </div>
-          </div>
-          <div className="panel">
-            <form onSubmit={handleUpload}>
-              <div className="field">
-                <label>Título</label>
-                <input type="text" name="title" />
-              </div>
-              <div className="field">
-                <label>Artista</label>
-                <input type="text" name="artist" />
-              </div>
-              <div className="field">
-                <label>Audio (mp3/ogg/opus/wav)</label>
-                <input type="file" name="audio" accept=".mp3,.ogg,.opus,.wav" />
-              </div>
-              <div className="field">
-                <label>Letra (.lrc, .json o .cdg)</label>
-                <input type="file" name="lyrics" accept=".lrc,.json,.cdg" />
-              </div>
-              <div className="field">
-                <label>Video (karaoke con letra quemada, sin audio aparte)</label>
-                <input type="file" name="video" accept=".mp4,.webm,.mov" />
-              </div>
-              <button className="btn-primary" type="submit">
-                Subir
-              </button>
-            </form>
-            {uploadMessage && <p className="ok">{uploadMessage}</p>}
-            {uploadError && <p className="error">{uploadError}</p>}
-          </div>
-        </section>
-
-        <section className={`page${page === 'fondo' ? ' active' : ''}`}>
-          <div className="stage-head">
-            <div>
-              <h1>Fondo de video</h1>
-              <p>El clip detrás de la letra en la pantalla grande. La letra siempre queda encima, elijas el que elijas.</p>
-            </div>
-          </div>
-          <div className="panel">
-            <form onSubmit={handleBackgroundVideo}>
-              <div className="field">
-                <label>Video de fondo (mp4/webm/mov)</label>
-                <input type="file" name="video" accept=".mp4,.webm,.mov" required />
-              </div>
-              <button className="btn-primary" type="submit">
-                Actualizar fondo
-              </button>
-            </form>
-            {backgroundMessage && <p className="ok">{backgroundMessage}</p>}
-          </div>
-
-          <div className="panel live-camera-panel">
-            <div className="card-title">Fuente en vivo (OBS)</div>
-            <p className="hint">
-              Muestra lo que esté saliendo de una cámara en vivo detrás de la letra — pensado para la cámara virtual
-              de OBS ("Iniciar cámara virtual"), pero funciona con cualquier webcam. Mientras esté activa, tapa al
-              video de fondo subido arriba.
+        {page === 'subir' && (
+        <div className="hck-scope hck-enter" style={{ padding: 'clamp(24px,2.2vw,44px) clamp(24px,3vw,68px) 160px', display: 'flex', flexDirection: 'column', gap: 'clamp(24px,2.4vw,44px)' }}>
+          <button className="hck-btn hck-btn-ghost" style={{ alignSelf: 'flex-start' }} onClick={() => setPage('studio')}>
+            <Icon name="chevL" size={15} /> Studio
+          </button>
+          <div>
+            <h2>Subir canción armada</h2>
+            <p className="hck-muted" style={{ marginTop: '10px', fontSize: 'clamp(15px,1.1vw,19px)' }}>
+              Para cuando ya tenés un karaoke armado — LRC, JSON propio, CD+G o un video con letra quemada.
             </p>
-            <div className="field">
-              <label>Dispositivo</label>
-              <select value={selectedCameraId} onChange={(e) => setSelectedCameraId(e.target.value)}>
-                <option value="">Cámara por default</option>
-                {cameraDevices.map((d, i) => (
-                  <option key={d.deviceId} value={d.deviceId}>
-                    {d.label || `Cámara ${i + 1}`}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="live-camera-actions">
-              <button type="button" className="btn-secondary" onClick={refreshCameraDevices}>
-                <Icon name="refresh" size={14} /> Actualizar lista
-              </button>
-              {liveCameraStream ? (
-                <button type="button" className="btn-danger" onClick={stopLiveCamera}>
-                  Apagar cámara en vivo
-                </button>
-              ) : (
-                <button type="button" className="btn-primary" onClick={startLiveCamera}>
-                  Usar cámara en vivo
-                </button>
-              )}
-            </div>
-            {liveCameraStream && (
-              <p className="ok">
-                <Icon name="camera" size={13} /> Cámara en vivo activa — así se ve ahora en pantalla completa.
-              </p>
-            )}
-            {liveCameraError && <p className="error">{liveCameraError}</p>}
           </div>
-        </section>
-
-        <section className={`page${page === 'funbox' ? ' active' : ''}`}>
-          <div className="stage-head">
-            <div>
-              <h1>Fun Box</h1>
-              <p>Pack de templates para la animación de cara en el escenario — subí un video y se mapea solo.</p>
-            </div>
-          </div>
-          <div className="panel" style={{ maxWidth: '640px' }}>
-            <div className="field">
-              <label>Tipo de template</label>
-              <div className="funbox-kind-picker">
-                <label>
-                  <input
-                    type="radio"
-                    name="funboxKind"
-                    checked={funboxKind === 'sticker'}
-                    onChange={() => setFunboxKind('sticker')}
-                  />
-                  Sticker por color
-                </label>
-                <label>
-                  <input
-                    type="radio"
-                    name="funboxKind"
-                    checked={funboxKind === 'faceswap'}
-                    onChange={() => setFunboxKind('faceswap')}
-                  />
-                  Face swap con IA
-                </label>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(min(100%,380px),1fr))', gap: 'clamp(18px,1.8vw,30px)', alignItems: 'start' }}>
+            <form onSubmit={handleUpload} className="hck-card" style={{ gap: '16px' }}>
+              <div style={{ display: 'flex', gap: '16px' }}>
+                <div className="hck-field" style={{ flex: 1 }}><label>Título</label><input className="hck-input" type="text" name="title" /></div>
+                <div className="hck-field" style={{ flex: 1 }}><label>Artista</label><input className="hck-input" type="text" name="artist" /></div>
               </div>
-            </div>
-            <div className="field">
-              <label>Subir video nuevo</label>
-              <input
-                type="file"
-                accept=".mp4,.webm,.mov"
-                disabled={funboxUploading}
-                onChange={(e) => {
-                  const file = e.target.files?.[0]
-                  if (file) handleUploadTemplate(file, funboxKind)
-                  e.target.value = ''
-                }}
-              />
-              {funboxKind === 'sticker' ? (
-                <p className="hint">
-                  Corre el tracking por color automáticamente (unos segundos) — el video tiene que tener la
-                  máscara/capucha de color saturado que pide el director de escenas.
-                </p>
-              ) : (
-                <p className="hint">
-                  Corre el análisis de cara real automáticamente (puede tardar uno o dos minutos, no bloquea nada
-                  mientras tanto) — el video tiene que mostrar la cara del protagonista bien visible, de frente o
-                  3/4, con buena luz.
-                </p>
-              )}
-            </div>
-            {funboxUploading && <p className="hint">{funboxKind === 'sticker' ? 'Mapeando…' : 'Analizando la cara…'}</p>}
-            {funboxError && <p className="error">{funboxError}</p>}
-          </div>
-
-          {/* Probar el mapeo con una cara real, sin depender de estar en
-              pantalla completa en medio de un show — para distinguir "no
-              mapea bien" de "no se ve nada" de "se queda en el primer
-              frame". */}
-          {singersWithPhoto.length === 0 ? (
-            <p className="hint funbox-test-hint">
-              Para probar cómo queda mapeada la cara necesitás al menos un cantante con foto — registrá uno desde
-              Sesión de Karaoke.
-            </p>
-          ) : (
-            <div className="field funbox-test-picker">
-              <label>Probar con</label>
-              <select
-                value={testSingerId ?? singersWithPhoto[0].id}
-                onChange={(e) => setTestSingerId(e.target.value)}
-              >
-                {singersWithPhoto.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-
-          <div className="playlist-grid">
-            {templates.map((t) => {
-              const testSinger = singersWithPhoto.find((s) => s.id === testSingerId) ?? singersWithPhoto[0]
-              const testStatus = t.kind === 'faceswap' && testSinger ? faceswapStatus[testSinger.id]?.[t.id] : undefined
-              const testNotReady = t.kind === 'faceswap' && testStatus !== 'ready'
-              const testDisabled = singersWithPhoto.length === 0 || testNotReady
-              const testTitle =
-                singersWithPhoto.length === 0
-                  ? 'Necesitás un cantante con foto para probar'
-                  : testNotReady
-                    ? testStatus === 'failed'
-                      ? 'No se pudo generar el swap para este cantante'
-                      : 'Preparando el swap para este cantante…'
-                    : undefined
-              return (
-                <div className="card" key={t.id}>
-                  <video src={t.videoUrl} muted controls style={{ width: '100%', borderRadius: 'var(--radius-sm)' }} />
-                  <div className="card-meta" style={{ marginTop: '0.5rem' }}>
-                    <span className="tag">{t.kind === 'faceswap' ? 'Face swap IA' : 'Sticker'}</span> {t.id}
-                  </div>
-                  <div className="funbox-card-actions">
-                    <button className="btn-secondary" disabled={testDisabled} title={testTitle} onClick={() => testFunboxTemplate(t)}>
-                      <Icon name="wand" size={14} /> Probar
-                    </button>
-                    <button className="btn-danger" onClick={() => handleDeleteTemplate(t.id)}>
-                      <Icon name="trash" size={14} /> Eliminar
-                    </button>
-                  </div>
+              {[
+                { label: 'Audio (mp3/ogg/opus/wav)', name: 'audio', accept: '.mp3,.ogg,.opus,.wav' },
+                { label: 'Letra (.lrc, .json o .cdg)', name: 'lyrics', accept: '.lrc,.json,.cdg' },
+                { label: 'Video (karaoke con letra quemada, sin audio aparte)', name: 'video', accept: '.mp4,.webm,.mov' },
+              ].map((f) => (
+                <div className="hck-field" key={f.name}>
+                  <label>{f.label}</label>
+                  <input className="hck-input" type="file" name={f.name} accept={f.accept} style={{ padding: '12px 16px' }} />
                 </div>
-              )
-            })}
-            {templates.length === 0 && <p className="hint">Todavía no hay ningún template — subí el primero arriba.</p>}
+              ))}
+              <button className="hck-btn hck-btn-primary hck-btn-lg" type="submit">Subir al catálogo</button>
+              {uploadMessage && <p style={{ color: '#4ADE80', fontSize: '14px' }}>{uploadMessage}</p>}
+              {uploadError && <p style={{ color: '#F87171', fontSize: '14px' }}>{uploadError}</p>}
+            </form>
+            <div className="hck-card" style={{ gap: '14px', background: 'var(--hck-surface-2)' }}>
+              <h4>Qué detecta el kiosco</h4>
+              {[
+                ['LRC', 'línea por línea'],
+                ['JSON propio', 'palabra por palabra'],
+                ['CD+G', 'video generado del gráfico'],
+                ['Video quemado', 'se usa tal cual, sin letra propia'],
+              ].map(([a, b]) => (
+                <div key={a} style={{ display: 'flex', gap: '12px', alignItems: 'baseline' }}>
+                  <span className="hck-tag hck-tag-outline">{a}</span>
+                  <span className="hck-muted" style={{ fontSize: '15px' }}>{b}</span>
+                </div>
+              ))}
+              <p className="hck-faint" style={{ fontSize: '14px', marginTop: '6px' }}>
+                Un <span className="hck-mono">.m4a</span> es audio aunque el contenedor sea MP4: si viene con letra aparte, se respeta.
+              </p>
+            </div>
           </div>
-        </section>
+        </div>
+        )}
 
-        <section className={`page${page === 'configuracion' ? ' active' : ''}`}>
-          <div className="stage-head">
-            <div>
-              <h1>Configuración</h1>
-              <p>Ajustes generales del kiosco.</p>
-            </div>
+        {page === 'fondo' && (
+        <div className="hck-scope hck-enter" style={{ padding: 'clamp(24px,2.2vw,44px) clamp(24px,3vw,68px) 160px', display: 'flex', flexDirection: 'column', gap: 'clamp(24px,2.4vw,44px)' }}>
+          <button className="hck-btn hck-btn-ghost" style={{ alignSelf: 'flex-start' }} onClick={() => setPage('studio')}>
+            <Icon name="chevL" size={15} /> Studio
+          </button>
+          <div>
+            <h2>Fondo de video</h2>
+            <p className="hck-muted" style={{ marginTop: '10px', fontSize: 'clamp(15px,1.1vw,19px)' }}>
+              El clip detrás de la letra en la pantalla grande. La letra siempre queda encima, elijas el que elijas.
+            </p>
           </div>
-          <h2 className="config-section-title">Configuración general</h2>
-          <div className="playlist-grid">
-            <div className="card hub-card" onClick={() => setPage('importar')}>
-              <Icon name="folder" size={22} />
-              <div className="card-title">Importar carpetas</div>
-              <div className="card-body">Carpetas del disco con karaokes ya armados, sin copiar los archivos pesados.</div>
-            </div>
-            <div className="card hub-card" onClick={() => setPage('categorias')}>
-              <Icon name="home" size={22} />
-              <div className="card-title">Categorías de inicio</div>
-              <div className="card-body">Qué categorías se muestran en Inicio, y en qué orden — hasta 3.</div>
-            </div>
-            <div className="card hub-card" onClick={() => setPage('banners')}>
-              <Icon name="grid" size={22} />
-              <div className="card-title">Banners de inicio</div>
-              <div className="card-body">El carrusel panorámico arriba de las categorías en Inicio.</div>
-            </div>
-            <div className="card hub-card" onClick={() => setPage('portadas')}>
-              <Icon name="camera" size={22} />
-              <div className="card-title">Portadas de categoría</div>
-              <div className="card-body">Una imagen por categoría, para identificarlas de un vistazo en Inicio.</div>
-            </div>
-          </div>
-        </section>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(min(100%,380px),1fr))', gap: 'clamp(18px,1.8vw,30px)', alignItems: 'start' }}>
+            <form onSubmit={handleBackgroundVideo} className="hck-card" style={{ gap: '16px' }}>
+              <div className="hck-field">
+                <label>Video de fondo (mp4/webm/mov)</label>
+                <input className="hck-input" type="file" name="video" accept=".mp4,.webm,.mov" required style={{ padding: '12px 16px' }} />
+              </div>
+              <button className="hck-btn hck-btn-primary hck-btn-lg" type="submit">Actualizar fondo</button>
+              {backgroundMessage && <p style={{ color: '#4ADE80', fontSize: '14px' }}>{backgroundMessage}</p>}
+            </form>
 
-        <section className={`page${page === 'banners' ? ' active' : ''}`}>
-          <div className="stage-head">
-            <div>
-              <h1>Banners de inicio</h1>
-              <p>El carrusel panorámico arriba de las categorías en Inicio.</p>
+            <div className="hck-card" style={{ gap: '14px' }}>
+              <h4>Fuente en vivo (OBS)</h4>
+              <p className="hck-muted" style={{ fontSize: '15px' }}>
+                Muestra lo que esté saliendo de una cámara en vivo detrás de la letra — pensado para la cámara virtual
+                de OBS ("Iniciar cámara virtual"), pero funciona con cualquier webcam. Mientras esté activa, tapa al
+                video de fondo subido arriba.
+              </p>
+              <div className="hck-field">
+                <label>Dispositivo</label>
+                <select className="hck-input" value={selectedCameraId} onChange={(e) => setSelectedCameraId(e.target.value)}>
+                  <option value="">Cámara por default</option>
+                  {cameraDevices.map((d, i) => (
+                    <option key={d.deviceId} value={d.deviceId}>{d.label || `Cámara ${i + 1}`}</option>
+                  ))}
+                </select>
+              </div>
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <button type="button" className="hck-btn hck-btn-secondary" onClick={refreshCameraDevices}>
+                  <Icon name="refresh" size={14} /> Actualizar lista
+                </button>
+                {liveCameraStream ? (
+                  <button type="button" className="hck-btn hck-btn-on" onClick={stopLiveCamera}>Apagar cámara en vivo</button>
+                ) : (
+                  <button type="button" className="hck-btn hck-btn-primary" onClick={startLiveCamera}>Usar cámara en vivo</button>
+                )}
+              </div>
+              {liveCameraStream && (
+                <p style={{ color: '#4ADE80', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Icon name="camera" size={13} /> Cámara en vivo activa — así se ve ahora en pantalla completa.
+                </p>
+              )}
+              {liveCameraError && <p style={{ color: '#F87171', fontSize: '14px' }}>{liveCameraError}</p>}
             </div>
           </div>
-          <button className="btn-ghost" style={{ width: 'fit-content' }} onClick={() => setPage('configuracion')}>
+        </div>
+        )}
+
+        {page === 'funbox' && (
+        <div className="hck-scope hck-enter" style={{ padding: 'clamp(24px,2.2vw,44px) clamp(24px,3vw,68px) 160px', display: 'flex', flexDirection: 'column', gap: 'clamp(24px,2.4vw,44px)' }}>
+          <button className="hck-btn hck-btn-ghost" style={{ alignSelf: 'flex-start' }} onClick={() => setPage('studio')}>
+            <Icon name="chevL" size={15} /> Studio
+          </button>
+          <div>
+            <h2>Fun Box</h2>
+            <p className="hck-muted" style={{ marginTop: '10px', fontSize: 'clamp(15px,1.1vw,19px)' }}>
+              Pack de templates para la animación de cara en el escenario — subí un video y se mapea solo.
+            </p>
+          </div>
+
+          <FunBox
+            templates={templates}
+            faceswapStatus={faceswapStatus}
+            singersWithPhoto={singersWithPhoto}
+            testSingerId={testSingerId}
+            onSetTestSingerId={setTestSingerId}
+            uploading={funboxUploading}
+            error={funboxError}
+            onUpload={handleUploadTemplate}
+            onTest={testFunboxTemplate}
+            onRename={handleRenameTemplate}
+            onSetHotkey={handleSetTemplateHotkey}
+            onDelete={handleDeleteTemplate}
+          />
+        </div>
+        )}
+
+        {page === 'configuracion' && (
+        <div className="hck-scope hck-enter" style={{ padding: 'clamp(24px,2.2vw,44px) clamp(24px,3vw,68px) 160px', display: 'flex', flexDirection: 'column', gap: 'clamp(24px,2.4vw,44px)' }}>
+          <div>
+            <h2>Configuración</h2>
+            <p className="hck-muted" style={{ marginTop: '10px', fontSize: 'clamp(15px,1.1vw,19px)' }}>Ajustes generales del kiosco.</p>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(clamp(260px,22vw,340px),1fr))', gap: 'clamp(16px,1.6vw,26px)' }}>
+            {hubCard('folder', 'Importar carpetas', 'Carpetas del disco con karaokes ya armados, sin copiar los archivos pesados.', () => setPage('importar'))}
+            {hubCard('grid', 'Banners de inicio', 'El carrusel panorámico arriba de las categorías en Inicio.', () => setPage('banners'))}
+            {hubCard('camera', 'Portadas de categoría', 'Una imagen por categoría, para identificarlas de un vistazo en Inicio.', () => setPage('portadas'))}
+          </div>
+        </div>
+        )}
+
+        {page === 'banners' && (
+        <div className="hck-scope hck-enter" style={{ padding: 'clamp(24px,2.2vw,44px) clamp(24px,3vw,68px) 160px', display: 'flex', flexDirection: 'column', gap: 'clamp(24px,2.4vw,44px)' }}>
+          <button className="hck-btn hck-btn-ghost" style={{ alignSelf: 'flex-start' }} onClick={() => setPage('configuracion')}>
             <Icon name="chevL" size={15} /> Configuración
           </button>
+          <div>
+            <h2>Banners de inicio</h2>
+            <p className="hck-muted" style={{ marginTop: '10px', fontSize: 'clamp(15px,1.1vw,19px)' }}>El carrusel panorámico arriba de las categorías en Inicio.</p>
+          </div>
 
-          <div className="panel" style={{ maxWidth: '640px' }}>
-            <div className="field">
+          <div className="hck-card" style={{ maxWidth: '640px', gap: '12px' }}>
+            <div className="hck-field">
               <label>Subir banner nuevo</label>
               <input
+                className="hck-input"
                 type="file"
                 accept="image/*"
                 disabled={bannerUploading}
+                style={{ padding: '12px 16px' }}
                 onChange={(e) => {
                   const file = e.target.files?.[0]
                   if (file) handleUploadBanner(file)
                   e.target.value = ''
                 }}
               />
-              <p className="hint">
+              <p className="hck-faint" style={{ fontSize: '13.5px', marginTop: '8px' }}>
                 Subilo en <strong>2100×900px</strong> (relación de aspecto 21:9, panorámico) — es como se recorta en
                 pantalla, y si el texto ya viene quemado en la imagen (ver PROMPTS-BANNERS.md) conviene generarlo
                 directamente en esa proporción para que no quede nada importante cerca de los bordes.
               </p>
             </div>
-            {bannerUploading && <p className="hint">Subiendo…</p>}
+            {bannerUploading && <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}><span className="hck-spinner" /><span className="hck-muted" style={{ fontSize: '14.5px' }}>Subiendo…</span></div>}
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', maxWidth: '640px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxWidth: '640px' }}>
             {banners.map((b, i) => (
-              <div className="card banner-manage-card" key={b.id}>
-                <img className="banner-manage-thumb" src={b.imageUrl} alt="" />
+              <div key={b.id} className="hck-card" style={{ flexDirection: 'row', alignItems: 'center', gap: '16px', padding: '12px' }}>
+                <img src={b.imageUrl} alt="" style={{ width: '120px', height: '52px', objectFit: 'cover', borderRadius: 'var(--hck-r-md)', flex: 'none' }} />
                 <div style={{ flex: 1 }} />
-                <button className="btn-icon" disabled={i === 0} onClick={() => reorderBanner(b.id, 'up')} aria-label="Subir">
+                <button className="hck-btn hck-btn-icon hck-btn-ghost" disabled={i === 0} onClick={() => reorderBanner(b.id, 'up')} aria-label="Subir">
                   <Icon name="up" size={15} />
                 </button>
-                <button
-                  className="btn-icon"
-                  disabled={i === banners.length - 1}
-                  onClick={() => reorderBanner(b.id, 'down')}
-                  aria-label="Bajar"
-                >
+                <button className="hck-btn hck-btn-icon hck-btn-ghost" disabled={i === banners.length - 1} onClick={() => reorderBanner(b.id, 'down')} aria-label="Bajar">
                   <Icon name="down" size={15} />
                 </button>
-                <button className="btn-icon" onClick={() => handleDeleteBanner(b.id)} aria-label="Eliminar">
+                <button className="hck-btn hck-btn-icon hck-btn-ghost" onClick={() => handleDeleteBanner(b.id)} aria-label="Eliminar">
                   <Icon name="trash" size={15} />
                 </button>
               </div>
             ))}
-            {banners.length === 0 && <p className="hint">Todavía no hay ningún banner — subí el primero arriba.</p>}
+            {banners.length === 0 && <p className="hck-muted">Todavía no hay ningún banner — subí el primero arriba.</p>}
           </div>
-        </section>
+        </div>
+        )}
 
-        <section className={`page${page === 'categorias' ? ' active' : ''}`}>
-          <div className="stage-head">
-            <div>
-              <h1>Categorías de inicio</h1>
-              <p>Elegí hasta tres. Cada una muestra hasta 15 canciones en Inicio.</p>
-            </div>
-          </div>
-          <button className="btn-ghost" style={{ width: 'fit-content' }} onClick={() => setPage('configuracion')}>
+        {page === 'portadas' && (
+        <div className="hck-scope hck-enter" style={{ padding: 'clamp(24px,2.2vw,44px) clamp(24px,3vw,68px) 160px', display: 'flex', flexDirection: 'column', gap: 'clamp(24px,2.4vw,44px)' }}>
+          <button className="hck-btn hck-btn-ghost" style={{ alignSelf: 'flex-start' }} onClick={() => setPage('configuracion')}>
             <Icon name="chevL" size={15} /> Configuración
           </button>
-          <div style={{ maxWidth: '620px', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-            <div className="hint">En Inicio, en este orden</div>
-            {homeCategories.map((catId, i) => {
-              const cat = CATEGORIES.find((c) => c.id === catId)
-              return (
-                <div className="card" key={catId} style={{ flexDirection: 'row', alignItems: 'center', gap: '0.75rem', padding: '0.6rem 0.9rem' }}>
-                  <span className="card-meta" style={{ width: '20px' }}>
-                    {i + 1}
-                  </span>
-                  <div style={{ flex: 1 }}>
-                    <div className="card-title" style={{ fontSize: '0.9rem' }}>
-                      {cat?.name ?? catId}
-                    </div>
-                    <div className="card-meta">{cat?.desc}</div>
-                  </div>
-                  <button
-                    className="btn-icon"
-                    disabled={i === 0}
-                    onClick={() => {
-                      const next = [...homeCategories]
-                      ;[next[i - 1], next[i]] = [next[i], next[i - 1]]
-                      setHomeCategories(next)
-                      fetch('/api/settings/home-categories', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ ids: next }),
-                      })
-                    }}
-                    aria-label="Subir"
-                  >
-                    <Icon name="up" size={15} />
-                  </button>
-                  <button
-                    className="btn-icon"
-                    disabled={i === homeCategories.length - 1}
-                    onClick={() => {
-                      const next = [...homeCategories]
-                      ;[next[i], next[i + 1]] = [next[i + 1], next[i]]
-                      setHomeCategories(next)
-                      fetch('/api/settings/home-categories', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ ids: next }),
-                      })
-                    }}
-                    aria-label="Bajar"
-                  >
-                    <Icon name="down" size={15} />
-                  </button>
-                  <button
-                    className="btn-icon"
-                    onClick={() => {
-                      const next = homeCategories.filter((id) => id !== catId)
-                      setHomeCategories(next)
-                      fetch('/api/settings/home-categories', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ ids: next }),
-                      })
-                    }}
-                    aria-label="Quitar"
-                  >
-                    <Icon name="x" size={15} />
-                  </button>
-                </div>
-              )
-            })}
+          <div>
+            <h2>Portadas de categoría</h2>
+            <p className="hck-muted" style={{ marginTop: '10px', fontSize: 'clamp(15px,1.1vw,19px)' }}>
+              Una imagen por categoría — se achica y recorta sola a un cuadrado parejo al subirla.
+            </p>
           </div>
-          <div style={{ maxWidth: '620px' }}>
-            <div className="hint" style={{ marginBottom: '0.5rem' }}>
-              Disponibles
-            </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
-              {CATEGORIES.filter((c) => !homeCategories.includes(c.id)).map((c) => (
-                <button
-                  key={c.id}
-                  className="btn-secondary"
-                  disabled={homeCategories.length >= 3}
-                  title={c.desc}
-                  onClick={() => {
-                    const next = [...homeCategories, c.id]
-                    setHomeCategories(next)
-                    fetch('/api/settings/home-categories', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ ids: next }),
-                    })
-                  }}
-                >
-                  <Icon name="plus" size={14} /> {c.name}
-                </button>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        <section className={`page${page === 'portadas' ? ' active' : ''}`}>
-          <div className="stage-head">
-            <div>
-              <h1>Portadas de categoría</h1>
-              <p>Una imagen por categoría — se achica y recorta sola a un cuadrado parejo al subirla.</p>
-            </div>
-          </div>
-          <button className="btn-ghost" style={{ width: 'fit-content' }} onClick={() => setPage('configuracion')}>
-            <Icon name="chevL" size={15} /> Configuración
-          </button>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', maxWidth: '780px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(170px,1fr))', gap: 'clamp(14px,1.3vw,20px)', maxWidth: '900px' }}>
             {CATEGORIES.map((c) => {
               const imageUrl = categoryImages[c.id]
               const uploading = categoryImageUploading === c.id
               return (
-                <div
-                  className="card"
-                  key={c.id}
-                  style={{ width: '160px', padding: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', alignItems: 'center' }}
-                >
+                <div key={c.id} className="hck-card" style={{ padding: '14px', gap: '12px', alignItems: 'center' }}>
                   <div
-                    style={{
-                      width: '96px',
-                      height: '96px',
-                      borderRadius: '10px',
-                      overflow: 'hidden',
-                      background: imageUrl ? 'transparent' : songColor(c.id),
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                    }}
+                    className="hck-art"
+                    style={{ width: '100%', aspectRatio: '1', borderRadius: 'var(--hck-r-md)', background: imageUrl ? 'transparent' : 'var(--hck-surface-2)' }}
                   >
-                    {imageUrl && <img src={imageUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />}
+                    {imageUrl && <img src={imageUrl} alt="" />}
                   </div>
-                  <div className="card-title" style={{ fontSize: '0.85rem', textAlign: 'center' }}>
-                    {c.name}
-                  </div>
-                  <label className="btn-secondary" style={{ width: '100%', textAlign: 'center', cursor: 'pointer' }}>
+                  <span style={{ fontSize: '15.5px', fontWeight: 700, textAlign: 'center' }}>{c.name}</span>
+                  <label className="hck-btn hck-btn-secondary hck-btn-block" style={{ textAlign: 'center', cursor: 'pointer' }}>
                     {uploading ? 'Subiendo…' : imageUrl ? 'Cambiar imagen' : 'Subir imagen'}
                     <input
                       type="file"
@@ -2945,7 +3159,7 @@ export function App() {
                     />
                   </label>
                   {imageUrl && (
-                    <button className="btn-ghost" style={{ width: '100%' }} onClick={() => handleDeleteCategoryImage(c.id)}>
+                    <button className="hck-btn hck-btn-ghost hck-btn-block" onClick={() => handleDeleteCategoryImage(c.id)}>
                       Quitar
                     </button>
                   )}
@@ -2953,71 +3167,71 @@ export function App() {
               )
             })}
           </div>
-        </section>
+        </div>
+        )}
 
-        <section className={`page${page === 'importar' ? ' active' : ''}`}>
-          <div className="stage-head">
-            <div>
-              <h1>Importar carpetas</h1>
-              <p>
-                Agregá carpetas del disco con karaokes ya armados (audio + letra, o video con letra quemada). No se
-                copian los archivos pesados — se sirven desde su ubicación original.
-              </p>
-            </div>
+        {page === 'importar' && (
+        <div className="hck-scope hck-enter" style={{ padding: 'clamp(24px,2.2vw,44px) clamp(24px,3vw,68px) 160px', display: 'flex', flexDirection: 'column', gap: 'clamp(24px,2.4vw,44px)' }}>
+          <button className="hck-btn hck-btn-ghost" style={{ alignSelf: 'flex-start' }} onClick={() => setPage('configuracion')}>
+            <Icon name="chevL" size={15} /> Configuración
+          </button>
+          <div>
+            <h2>Importar carpetas</h2>
+            <p className="hck-muted" style={{ marginTop: '10px', fontSize: 'clamp(15px,1.1vw,19px)' }}>
+              Agregá carpetas del disco con karaokes ya armados (audio + letra, o video con letra quemada). No se
+              copian los archivos pesados — se sirven desde su ubicación original.
+            </p>
           </div>
-          <div className="panel">
-            <div className="field">
+          <div className="hck-card" style={{ gap: '14px', maxWidth: '780px' }}>
+            <div className="hck-field">
               <label>Agregar carpeta</label>
-              <div className="import-add-row">
+              <div style={{ display: 'flex', gap: '12px' }}>
                 <input
+                  className="hck-input hck-mono"
+                  style={{ flex: 1 }}
                   type="text"
                   placeholder="C:\Karaoke\Repertorio"
                   value={newImportRoot}
                   onChange={(e) => setNewImportRoot(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && addImportRoot()}
                 />
-                <button className="btn-primary" type="button" onClick={addImportRoot}>
-                  Agregar
-                </button>
+                <button className="hck-btn hck-btn-primary" type="button" onClick={addImportRoot}>Agregar</button>
               </div>
             </div>
 
             {importRoots.length > 0 && (
-              <ul className="import-roots-list">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                 {importRoots.map((root) => (
-                  <li key={root}>
-                    <span>{root}</span>
-                    <button className="btn-secondary" type="button" onClick={() => removeImportRoot(root)}>
-                      Quitar
+                  <div key={root} style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '10px 14px', borderRadius: 'var(--hck-r-md)', background: 'var(--hck-surface-2)' }}>
+                    <span className="hck-faint"><Icon name="folder" size={18} /></span>
+                    <span className="hck-mono" style={{ flex: 1, fontSize: '14.5px' }}>{root}</span>
+                    <button className="hck-btn hck-btn-icon hck-btn-ghost" type="button" onClick={() => removeImportRoot(root)} aria-label="Quitar">
+                      <Icon name="x" size={16} />
                     </button>
-                  </li>
+                  </div>
                 ))}
-              </ul>
+              </div>
             )}
 
-            {importError && <p className="error">{importError}</p>}
-            {importMessage && <p className="ok">{importMessage}</p>}
+            {importError && <p style={{ color: '#F87171', fontSize: '14px' }}>{importError}</p>}
+            {importMessage && <p style={{ color: '#4ADE80', fontSize: '14px' }}>{importMessage}</p>}
 
-            <button
-              className="btn-primary"
-              type="button"
-              disabled={importRoots.length === 0 || importScanning}
-              onClick={scanImportFolders}
-            >
+            <button className="hck-btn hck-btn-primary hck-btn-lg" type="button" disabled={importRoots.length === 0 || importScanning} onClick={scanImportFolders}>
               {importScanning ? 'Escaneando…' : 'Buscar karaokes nuevos'}
             </button>
           </div>
 
           {importCandidates && (
-            <div className="panel panel--wide">
+            <div>
               {importCandidates.length === 0 ? (
-                <p className="hint">No se encontraron karaokes nuevos en las carpetas configuradas.</p>
+                <p className="hck-muted">No se encontraron karaokes nuevos en las carpetas configuradas.</p>
               ) : (
                 <>
-                  <div className="stage-head">
-                    <h2>{importCandidates.length} encontrados</h2>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '16px' }}>
+                    <h4>{importCandidates.length} encontrados</h4>
                     <button
-                      className="btn-primary"
+                      className="hck-btn hck-btn-primary"
+                      style={{ marginLeft: 'auto' }}
                       type="button"
                       disabled={importRunning || !importCandidates.some((c) => c.detection.ok)}
                       onClick={() => runImportCandidates(importCandidates.filter((c) => c.detection.ok))}
@@ -3025,43 +3239,44 @@ export function App() {
                       {importRunning ? 'Importando…' : 'Importar todos los válidos'}
                     </button>
                   </div>
-                  <div className="library-table import-table">
-                    <div className="library-row library-row--head import-row">
-                      <div>Canción</div>
-                      <div>Artista</div>
-                      <div>Detección</div>
-                      <div />
-                    </div>
-                    {importCandidates.map((c) => (
-                      <div key={c.key} className="library-row import-row">
-                        <div className="song-cell">{c.title}</div>
-                        <div className="dim-cell">{c.artist}</div>
-                        <div className="dim-cell">
-                          {c.detection.ok ? (
-                            <span className="ok">{c.detection.message}</span>
-                          ) : (
-                            <span className="error">{c.detection.reason}</span>
-                          )}
-                        </div>
-                        <div className="row-actions">
-                          <button
-                            className="btn-secondary"
-                            type="button"
-                            disabled={!c.detection.ok || importRunning}
-                            onClick={() => runImportCandidates([c])}
-                          >
-                            Importar
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                  <table className="hck-table">
+                    <thead>
+                      <tr><th>Canción</th><th>Artista</th><th>Detección</th><th style={{ width: '200px' }} /></tr>
+                    </thead>
+                    <tbody>
+                      {importCandidates.map((c) => (
+                        <tr key={c.key}>
+                          <td style={{ fontWeight: 700 }}>{c.title}</td>
+                          <td className="hck-muted">{c.artist}</td>
+                          <td>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                              <span className={`hck-tag ${c.detection.ok ? 'hck-tag-accent' : 'hck-tag-outline'}`}>{c.detection.ok ? 'listo' : 'no se puede'}</span>
+                              <span className="hck-muted" style={{ fontSize: '14px' }}>{c.detection.ok ? c.detection.message : c.detection.reason}</span>
+                            </div>
+                          </td>
+                          <td style={{ textAlign: 'right' }}>
+                            <button
+                              className="hck-btn hck-btn-secondary"
+                              type="button"
+                              disabled={!c.detection.ok || importRunning}
+                              onClick={() => runImportCandidates([c])}
+                            >
+                              Importar
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </>
               )}
             </div>
           )}
-        </section>
+        </div>
+        )}
       </main>
+      </div>
+      )}
 
       {/* Prueba de Fun Box: fuera del gate de kioskMode a propósito — se
           dispara desde Studio, no desde una sesión en vivo. */}
@@ -3186,16 +3401,20 @@ export function App() {
       )}
 
       {resyncSong && (
-        <div className="modal-backdrop" onClick={closeResync}>
-          <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
+        <div className="hck-scope hck-dialog-back" onClick={closeResync}>
+          <div className="hck-dialog" onClick={(e) => e.stopPropagation()} style={{ width: 'min(620px,100%)', maxHeight: '86vh', overflowY: 'auto' }}>
             <h2>Re-sincronizar "{resyncSong.title}"</h2>
-            <p className="hint">
+            <p className="hck-faint" style={{ fontSize: '14.5px', marginTop: '-8px' }}>
               El audio no cambia — solo se vuelve a correr el reconocimiento con la letra y el idioma que pongas acá.
               Usalo si la letra quedó desincronizada o se sincronizó con el idioma equivocado.
             </p>
-            <div className="field">
+            <div className="hck-field">
               <label>Idioma de la letra</label>
-              <select value={resyncLanguage} onChange={(e) => setResyncLanguage(e.target.value)}>
+              <select
+                className="hck-input"
+                value={resyncLanguage}
+                onChange={(e) => setResyncLanguage(e.target.value)}
+              >
                 {LANGUAGE_OPTIONS.map((opt) => (
                   <option key={opt.value} value={opt.value}>
                     {opt.label}
@@ -3203,32 +3422,37 @@ export function App() {
                 ))}
               </select>
             </div>
-            <label className="checkbox-field">
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer' }}>
               <input
                 type="checkbox"
                 checked={resyncSeparateVocals}
                 onChange={(e) => setResyncSeparateVocals(e.target.checked)}
+                style={{ marginTop: '3px' }}
               />
-              <span>
+              <span style={{ fontSize: '15px' }}>
                 Separar voz del instrumental antes de sincronizar (Demucs)
-                <span className="hint"> — mejor precisión con mucha base instrumental, tarda más.</span>
+                <span className="hck-faint" style={{ fontSize: '13.5px' }}>
+                  {' '}
+                  — mejor precisión con mucha base instrumental, tarda más.
+                </span>
               </span>
             </label>
-            <div className="field">
+            <div className="hck-field">
               <label>Letra completa (una línea por renglón)</label>
               <textarea
+                className="hck-input"
                 rows={10}
                 value={resyncLyricsText}
                 onChange={(e) => setResyncLyricsText(e.target.value)}
                 placeholder={'Pegá acá la letra completa,\nuna línea por renglón...'}
               />
             </div>
-            {resyncError && <p className="error">{resyncError}</p>}
-            <div className="step-actions">
-              <button className="btn-secondary" onClick={closeResync} disabled={resyncing}>
+            {resyncError && <p style={{ color: '#FCA5A5', fontSize: '14.5px' }}>{resyncError}</p>}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button className="hck-btn hck-btn-secondary" onClick={closeResync} disabled={resyncing}>
                 Cancelar
               </button>
-              <button className="btn-primary" onClick={submitResync} disabled={resyncing || !resyncLyricsText.trim()}>
+              <button className="hck-btn hck-btn-primary" onClick={submitResync} disabled={resyncing || !resyncLyricsText.trim()}>
                 {resyncing ? 'Sincronizando…' : 'Re-sincronizar'}
               </button>
             </div>
@@ -3237,26 +3461,44 @@ export function App() {
       )}
 
       {addToPlaylistSong && (
-        <div className="modal-backdrop" onClick={() => setAddToPlaylistSong(null)}>
-          <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
+        <div className="hck-scope hck-dialog-back" onClick={() => setAddToPlaylistSong(null)}>
+          <div className="hck-dialog" onClick={(e) => e.stopPropagation()}>
             <h2>Agregar "{addToPlaylistSong.title}" a…</h2>
             {playlists.length === 0 ? (
-              <p className="hint">No hay playlists todavía. Creá una desde la pantalla Playlists.</p>
+              <p className="hck-faint" style={{ fontSize: '14.5px' }}>
+                No hay playlists todavía — creá la primera acá mismo.
+              </p>
             ) : (
-              <div className="playlist-picker">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 {playlists.map((p) => (
                   <button
                     key={p.id}
-                    className="btn-secondary"
+                    className="hck-btn hck-btn-secondary hck-btn-block"
+                    style={{ justifyContent: 'space-between' }}
                     onClick={() => addSongToPlaylist(p.id, addToPlaylistSong.id)}
                   >
-                    {p.name} <span className="hint">({p.songCount})</span>
+                    {p.name} <span className="hck-faint">({p.songCount})</span>
                   </button>
                 ))}
               </div>
             )}
-            <div className="step-actions">
-              <button className="btn-secondary" onClick={() => setAddToPlaylistSong(null)}>
+            <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-end', paddingTop: '10px', borderTop: '1px solid var(--hck-line)' }}>
+              <div className="hck-field" style={{ flex: 1 }}>
+                <label>Nueva playlist</label>
+                <input
+                  className="hck-input"
+                  value={quickPlaylistName}
+                  onChange={(e) => setQuickPlaylistName(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleCreatePlaylistAndAdd()}
+                  placeholder="Nombre de la playlist"
+                />
+              </div>
+              <button className="hck-btn hck-btn-primary" disabled={!quickPlaylistName.trim() || creatingQuickPlaylist} onClick={handleCreatePlaylistAndAdd}>
+                {creatingQuickPlaylist ? 'Creando…' : 'Crear y agregar'}
+              </button>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button className="hck-btn hck-btn-secondary" onClick={() => setAddToPlaylistSong(null)}>
                 Cancelar
               </button>
             </div>
@@ -3265,10 +3507,10 @@ export function App() {
       )}
 
       {pushPlaylist && (
-        <div className="modal-backdrop" onClick={() => setPushPlaylist(null)}>
-          <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
+        <div className="hck-scope hck-dialog-back" onClick={() => setPushPlaylist(null)}>
+          <div className="hck-dialog" onClick={(e) => e.stopPropagation()}>
             <h2>Agregar "{pushPlaylist.name}" a la sesión</h2>
-            <p className="hint">
+            <p className="hck-faint" style={{ fontSize: '14.5px', marginTop: '-8px' }}>
               Se van a encolar sus {pushPlaylist.songCount} canciones, en orden, al final de la cola.
             </p>
             <SingerPicker
@@ -3284,11 +3526,11 @@ export function App() {
               onEnter={submitPushPlaylist}
               previewTemplate={stickerTemplates[0]}
             />
-            <div className="step-actions">
-              <button className="btn-secondary" onClick={() => setPushPlaylist(null)}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button className="hck-btn hck-btn-secondary" onClick={() => setPushPlaylist(null)}>
                 Cancelar
               </button>
-              <button className="btn-primary" onClick={submitPushPlaylist}>
+              <button className="hck-btn hck-btn-primary" onClick={submitPushPlaylist}>
                 Agregar a la cola
               </button>
             </div>
@@ -3297,8 +3539,8 @@ export function App() {
       )}
 
       {queueSong && (
-        <div className="modal-backdrop" onClick={() => setQueueSong(null)}>
-          <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
+        <div className="hck-scope hck-dialog-back" onClick={() => setQueueSong(null)}>
+          <div className="hck-dialog" onClick={(e) => e.stopPropagation()}>
             <h2>Agregar "{queueSong.title}" a la cola</h2>
             <SingerPicker
               sessionSingers={sessionSingers}
@@ -3313,11 +3555,11 @@ export function App() {
               onEnter={submitAddToQueue}
               previewTemplate={stickerTemplates[0]}
             />
-            <div className="step-actions">
-              <button className="btn-secondary" onClick={() => setQueueSong(null)}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button className="hck-btn hck-btn-secondary" onClick={() => setQueueSong(null)}>
                 Cancelar
               </button>
-              <button className="btn-primary" onClick={submitAddToQueue}>
+              <button className="hck-btn hck-btn-primary" onClick={submitAddToQueue}>
                 Agregar a la cola
               </button>
             </div>
@@ -3353,17 +3595,18 @@ export function App() {
       )}
 
       {deleteSong && (
-        <div className="modal-backdrop" onClick={() => !deleting && setDeleteSong(null)}>
-          <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
+        <div className="hck-scope hck-dialog-back" onClick={() => !deleting && setDeleteSong(null)}>
+          <div className="hck-dialog" onClick={(e) => e.stopPropagation()}>
             <h2>¿Eliminar "{deleteSong.title}"?</h2>
-            <p className="hint">
+            <p className="hck-faint" style={{ fontSize: '14.5px', marginTop: '-8px' }}>
               Se borra el audio, la letra y cualquier cola/puntaje asociado. Esta acción no se puede deshacer.
+              El N° {deleteSong.number} queda invalidado para siempre — ninguna canción futura va a reutilizarlo.
             </p>
-            <div className="step-actions">
-              <button className="btn-secondary" onClick={() => setDeleteSong(null)} disabled={deleting}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button className="hck-btn hck-btn-secondary" onClick={() => setDeleteSong(null)} disabled={deleting}>
                 Cancelar
               </button>
-              <button className="btn-danger" onClick={confirmDeleteSong} disabled={deleting}>
+              <button className="hck-btn hck-btn-danger" onClick={confirmDeleteSong} disabled={deleting}>
                 {deleting ? 'Eliminando…' : 'Eliminar'}
               </button>
             </div>
@@ -3371,138 +3614,286 @@ export function App() {
         </div>
       )}
 
-      <div className="player-bar">
-        {nowPlayingSong && (
-          <input
-            type="range"
-            className="scrubber"
-            min={0}
-            max={duration || 0}
-            step={0.1}
-            disabled={!duration}
-            value={scrubValue ?? displayPosition}
-            style={{ ['--fill' as string]: `${duration ? ((scrubValue ?? displayPosition) / duration) * 100 : 0}%` }}
-            onChange={handleScrubDrag}
-            onMouseUp={handleScrubCommit}
-            onTouchEnd={handleScrubCommit}
-          />
-        )}
-        <div className="now-playing">
-          {nowPlayingSong ? (
-            <>
-              <div className="player-thumb" style={{ background: songColor(nowPlayingSong.id) }} />
-              <div className="now-playing-text">
-                <div className="now-playing-title">{nowPlayingSong.title}</div>
-                <div className="now-playing-artist">{nowPlayingSong.artist}</div>
-              </div>
-              <button
-                className="playpause-btn"
-                // Con una canción elegida pero sin arrancar (ej. después de
-                // recargar la página), el botón la pone en marcha en vez de
-                // quedar muerto y obligar a volver a la Biblioteca.
-                onClick={isLocalReady ? togglePlayPause : beginLocalPlayback}
-                aria-label={!isLocalReady || paused ? 'Reproducir' : 'Pausar'}
-              >
-                {!isLocalReady || paused ? (
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M6 4l14 8-14 8z" />
-                  </svg>
-                ) : (
-                  <div className="eq">
-                    <span />
-                    <span />
-                    <span />
-                    <span />
-                  </div>
-                )}
-              </button>
-              {duration > 0 && (
-                <div className="now-playing-time">
-                  {formatTime(scrubValue ?? displayPosition)} / {formatTime(duration)}
-                </div>
-              )}
-            </>
+      {!kioskMode && bgJobs.length > 0 && (
+        <div
+          className="hck-scope hck-card"
+          style={{
+            position: 'fixed',
+            left: 'calc(var(--hck-rail-w, 0px) + 24px)',
+            bottom: marqueeCollapsed ? '80px' : '150px',
+            zIndex: 20,
+            gap: '10px',
+            padding: bgJobsExpanded ? '16px 20px' : '10px 16px',
+            minWidth: bgJobsExpanded ? '260px' : undefined,
+            borderColor: 'var(--hck-accent)',
+          }}
+        >
+          {!bgJobsExpanded ? (
+            <button className="hck-btn hck-btn-ghost" style={{ padding: 0 }} onClick={() => setBgJobsExpanded(true)}>
+              <span className="hck-spinner" /> {bgJobs.length} trabajo{bgJobs.length === 1 ? '' : 's'} en curso
+            </button>
           ) : (
-            <div className="now-playing-empty">Nadie está cantando todavía</div>
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <span className="hck-kicker">Trabajos en curso</span>
+                <button
+                  className="hck-btn hck-btn-icon hck-btn-ghost"
+                  style={{ marginLeft: 'auto', width: '26px', height: '26px' }}
+                  onClick={() => setBgJobsExpanded(false)}
+                  title="Ocultar"
+                >
+                  <Icon name="collapse" size={14} />
+                </button>
+              </div>
+              {bgJobs.map((j) => (
+                <div key={j.id} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <span className="hck-spinner" />
+                  <span style={{ flex: 1, minWidth: 0, fontSize: '14.5px', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {j.label}
+                  </span>
+                  <button
+                    className="hck-btn hck-btn-secondary"
+                    style={{ fontSize: '13px', padding: '6px 10px' }}
+                    onClick={() => {
+                      setPage(j.returnPage)
+                      setBgJobsExpanded(false)
+                    }}
+                  >
+                    Volver
+                  </button>
+                </div>
+              ))}
+            </>
           )}
         </div>
+      )}
 
-        <div className="player-side">
-          <input
-            type="range"
-            className="volume-slider"
-            min={0}
-            max={100}
-            value={volume}
-            onChange={handleVolumeChange}
-            aria-label="Volumen"
-          />
-          <button
-            className={`pill-btn${showLyricsOverlay ? ' active' : ''}`}
-            onClick={() => setShowLyricsOverlay((v) => !v)}
-            disabled={!lyrics || kioskMode}
-          >
-            {showLyricsOverlay ? 'Ocultar letras' : 'Mostrar letras'}
-          </button>
-          {nowPlayingSong?.instrumentalUrl && (
-            <button
-              className={`pill-btn${vocalsOff ? ' active' : ''}`}
-              onClick={toggleVocals}
-              title="Apagar la voz original y cantar sobre la base sola"
-            >
-              {vocalsOff ? 'Voz original: apagada' : 'Apagar voz original'}
-            </button>
-          )}
-          {lyrics && !kioskMode && (
-            <button
-              className={`pill-btn${showSyncEditor ? ' active' : ''}`}
-              onClick={() => setShowSyncEditor((v) => !v)}
-              title="Corregir líneas que quedaron desincronizadas (ej. un coro repetido)"
-            >
-              Corregir sincronía
-            </button>
-          )}
-          <button
-            className={`pill-btn${autoAdvance ? ' active' : ''}`}
-            onClick={() => setAutoAdvance((v) => !v)}
-            title="Al terminar cada canción, pasar solo a la siguiente de la cola"
-          >
-            {autoAdvance ? 'Auto-avance: sí' : 'Auto-avance: no'}
-          </button>
-          {!kioskMode && (
-            <button className="pill-btn" onClick={enterKiosk}>
-              Pantalla completa
-            </button>
-          )}
+      {scoreBadge && (
+        <div
+          ref={scoreBadgeRef}
+          className="hck-scope hck-card"
+          style={{
+            position: 'fixed',
+            right: '24px',
+            bottom: kioskMode ? '24px' : marqueeCollapsed ? '80px' : '150px',
+            zIndex: 20,
+            gap: '8px',
+            padding: '16px 20px',
+            minWidth: '220px',
+            borderColor: 'var(--hck-accent)',
+            boxShadow: 'var(--hck-glow)',
+          }}
+        >
+          <span className="hck-kicker">Cargando puntuación</span>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px' }}>
+            <span className="hck-muted" style={{ fontSize: '15px' }}>
+              {queue.find((q) => q.id === scoreBadge.itemId)?.singer ?? 'Cantante'}
+            </span>
+            <span className="hck-mono" style={{ fontSize: '28px', fontWeight: 800, color: 'var(--hck-accent-lt)' }}>
+              {scoreBadge.input || '_'}
+            </span>
+          </div>
+          <span className="hck-faint" style={{ fontSize: '13px' }}>
+            <span className="hck-kbd">Enter</span> confirma · <span className="hck-kbd">Esc</span> cancela
+          </span>
         </div>
-      </div>
+      )}
+
+      {fxOpen && (
+        <div
+          ref={fxPanelRef}
+          className="hck-scope hck-card"
+          style={{
+            position: 'fixed',
+            right: 'clamp(16px,2vw,34px)',
+            bottom: kioskMode ? '90px' : marqueeCollapsed ? '80px' : '150px',
+            zIndex: 20,
+            width: 'min(720px,92vw)',
+            maxHeight: '62vh',
+            overflowY: 'auto',
+            gap: '16px',
+            boxShadow: '0 30px 70px rgba(0,0,0,.7), var(--hck-glow)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+            <h4>Efectos de Fun Box</h4>
+            <span className="hck-faint" style={{ fontSize: '14px' }}>Apretá el número o tocá el cuadro</span>
+            <button className="hck-btn hck-btn-ghost" style={{ marginLeft: 'auto', fontSize: '14.5px' }} onClick={() => { setPage('funbox'); setFxOpen(false) }}>
+              Administrar en Studio
+            </button>
+            <button className="hck-btn hck-btn-icon hck-btn-ghost" onClick={() => setFxOpen(false)}>
+              <Icon name="x" size={18} />
+            </button>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,minmax(0,1fr))', gap: '12px' }}>
+            {Array.from({ length: 9 }, (_, i) => templatesByHotkey.find((t) => t.hotkey === i + 1) ?? null).map((t, i) => {
+              if (!t) {
+                return (
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={() => { setPage('funbox'); setFxOpen(false) }}
+                    style={{ all: 'unset', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: '8px' }}
+                  >
+                    <div style={{ width: '100%', aspectRatio: '1', borderRadius: 'var(--hck-r-sm)', border: '1.5px dashed var(--hck-line-2)', display: 'grid', placeItems: 'center', color: 'var(--hck-deco)' }}>
+                      <Icon name="plus" size={22} />
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
+                      <span className="hck-kbd">{i + 1}</span>
+                      <span className="hck-faint" style={{ fontSize: '13px' }}>Libre</span>
+                    </div>
+                  </button>
+                )
+              }
+              const playingSingerId = queue[0]?.status === 'playing' ? queue[0].singerId : undefined
+              const status = t.kind === 'faceswap' && playingSingerId ? faceswapStatus[playingSingerId]?.[t.id] : undefined
+              const notReady = t.kind === 'faceswap' && status !== 'ready'
+              const disabled = kioskMode && notReady
+              const isActive = !!activeFaceSwap && (activeFaceSwap.kind === 'sticker' ? activeFaceSwap.template.id === t.id : activeFaceSwap.templateId === t.id)
+              return (
+                <button
+                  key={i}
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => {
+                    if (kioskMode) triggerFaceSwap(t)
+                    else { setPage('funbox'); setFxOpen(false) }
+                  }}
+                  style={{ all: 'unset', cursor: disabled ? 'not-allowed' : 'pointer', display: 'flex', flexDirection: 'column', gap: '8px', opacity: disabled ? 0.5 : 1 }}
+                >
+                  <div style={{ position: 'relative', width: '100%', aspectRatio: '1', borderRadius: 'var(--hck-r-sm)', overflow: 'hidden', border: `1.5px solid ${isActive ? 'var(--hck-accent)' : 'var(--hck-line)'}`, boxShadow: isActive ? 'var(--hck-glow)' : undefined }}>
+                    <video src={t.videoUrl} muted loop autoPlay playsInline style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '7px', minWidth: 0 }}>
+                    <span className="hck-kbd">{i + 1}</span>
+                    <span style={{ fontSize: '13px', fontWeight: 600, lineHeight: 1.25, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.name}</span>
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      <Marquee
+        page={page}
+        kioskMode={kioskMode}
+        nowPlayingSong={nowPlayingSong}
+        isLocalReady={isLocalReady}
+        paused={paused}
+        duration={duration}
+        scrubValue={scrubValue}
+        displayPosition={displayPosition}
+        onScrubDrag={handleScrubDrag}
+        onScrubCommit={handleScrubCommit}
+        onTogglePlay={isLocalReady ? togglePlayPause : beginLocalPlayback}
+        volume={volume}
+        onVolumeChange={handleVolumeChange}
+        vocalsOff={vocalsOff}
+        onToggleVocals={toggleVocals}
+        hasInstrumental={!!nowPlayingSong?.instrumentalUrl}
+        showSyncEditor={showSyncEditor}
+        onToggleSyncEditor={() => setShowSyncEditor((v) => !v)}
+        hasLyrics={!!lyrics}
+        showLyricsOverlay={showLyricsOverlay}
+        onToggleLyricsOverlay={() => setShowLyricsOverlay((v) => !v)}
+        autoAdvance={autoAdvance}
+        onToggleAutoAdvance={() => setAutoAdvance((v) => !v)}
+        onEnterKiosk={enterKiosk}
+        collapsed={marqueeCollapsed}
+        onToggleCollapse={() => setMarqueeCollapsed((v) => !v)}
+        fxOpen={fxOpen}
+        onToggleFx={() => setFxOpen((v) => !v)}
+      />
 
       {showSyncEditor && lyrics && (
-        <div className="sync-editor-panel">
-          <div className="sync-editor-head">
+        <div
+          className="hck-scope"
+          style={{
+            position: 'fixed',
+            top: 0,
+            right: 0,
+            bottom: '150px',
+            width: 'min(460px,100vw)',
+            zIndex: 400,
+            background: 'var(--hck-surface)',
+            borderLeft: '1px solid var(--hck-line-2)',
+            boxShadow: '-30px 0 60px rgba(0,0,0,.4)',
+            display: 'flex',
+            flexDirection: 'column',
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'flex-start',
+              justifyContent: 'space-between',
+              gap: '16px',
+              padding: '22px 22px 16px',
+              borderBottom: '1px solid var(--hck-line)',
+            }}
+          >
             <div>
-              <h2>Corregir sincronía</h2>
-              <p className="hint">
+              <h3>Corregir sincronía</h3>
+              <p className="hck-faint" style={{ fontSize: '13.5px', marginTop: '8px', lineHeight: 1.5 }}>
                 Escuchá y, cuando una línea suene en un momento distinto al que dice, tocá "Fijar acá" en ese
                 instante. "Fijar desde acá" además corre todo lo que sigue por el mismo desfasaje.
               </p>
             </div>
-            <button className="pill-btn" onClick={() => setShowSyncEditor(false)}>
-              Cerrar
+            <button
+              className="hck-btn hck-btn-ghost hck-btn-icon"
+              onClick={() => setShowSyncEditor(false)}
+              aria-label="Cerrar"
+              style={{ flex: 'none' }}
+            >
+              <Icon name="x" size={16} />
             </button>
           </div>
-          <div className="sync-editor-list">
+          <div style={{ flex: 1, overflowY: 'auto', padding: '10px', display: 'flex', flexDirection: 'column', gap: '3px' }}>
             {lyrics.lines.map((line, i) => {
               const isActive = displayPosition >= line.start && displayPosition < line.end
               return (
-                <div key={i} className={`sync-editor-row${isActive ? ' is-active' : ''}`}>
-                  <span className="sync-editor-time">{formatTime(line.start)}</span>
-                  <span className="sync-editor-text">{line.words.map((w) => w.t).join(' ')}</span>
-                  <div className="sync-editor-row-actions">
-                    <button className="sync-fix-btn" onClick={() => fixLineHere(i, false)}>
+                <div
+                  key={i}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '11px',
+                    padding: '9px 12px',
+                    borderRadius: 'var(--hck-r-sm)',
+                    ...(isActive
+                      ? { background: 'var(--hck-accent-12)', boxShadow: 'inset 0 0 0 1px var(--hck-accent)' }
+                      : {}),
+                  }}
+                >
+                  <span className="hck-mono hck-faint" style={{ fontSize: '12.5px', flex: 'none', width: '44px' }}>
+                    {formatTime(line.start)}
+                  </span>
+                  <span
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      fontSize: '14.5px',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}
+                  >
+                    {line.words.map((w) => w.t).join(' ')}
+                  </span>
+                  <div style={{ display: 'flex', gap: '6px', flex: 'none' }}>
+                    <button
+                      className="hck-btn hck-btn-secondary"
+                      style={{ padding: '6px 12px', fontSize: '12px' }}
+                      onClick={() => fixLineHere(i, false)}
+                    >
                       Fijar acá
                     </button>
-                    <button className="sync-fix-btn" onClick={() => fixLineHere(i, true)}>
+                    <button
+                      className="hck-btn hck-btn-secondary"
+                      style={{ padding: '6px 12px', fontSize: '12px' }}
+                      onClick={() => fixLineHere(i, true)}
+                    >
                       Fijar desde acá →
                     </button>
                   </div>
@@ -3510,19 +3901,31 @@ export function App() {
               )
             })}
           </div>
-          <div className="sync-editor-footer">
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '12px',
+              padding: '16px 22px',
+              borderTop: '1px solid var(--hck-line)',
+            }}
+          >
             {syncEdited ? (
               <>
-                <span className="hint">Hay cambios sin guardar.</span>
-                <button className="btn-secondary" onClick={discardSyncEdits} disabled={savingSyncEdits}>
+                <span className="hck-faint" style={{ flex: 1, fontSize: '13.5px' }}>
+                  Hay cambios sin guardar.
+                </span>
+                <button className="hck-btn hck-btn-secondary" onClick={discardSyncEdits} disabled={savingSyncEdits}>
                   Descartar
                 </button>
-                <button className="btn-primary" onClick={saveSyncEdits} disabled={savingSyncEdits}>
+                <button className="hck-btn hck-btn-primary" onClick={saveSyncEdits} disabled={savingSyncEdits}>
                   {savingSyncEdits ? 'Guardando…' : 'Guardar cambios'}
                 </button>
               </>
             ) : (
-              <span className="hint">Sin cambios sin guardar.</span>
+              <span className="hck-faint" style={{ flex: 1, fontSize: '13.5px' }}>
+                Sin cambios sin guardar.
+              </span>
             )}
           </div>
         </div>

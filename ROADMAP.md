@@ -1,6 +1,6 @@
 # Roadmap — Kiosco de Karaoke
 
-_Última actualización: 2026-08-14._
+_Última actualización: 2026-08-20._
 
 ## Corregida la segmentación de palabras del catálogo legado (sesión 2026-08-14)
 
@@ -154,6 +154,7 @@ Probado de punta a punta contra el servidor real: generé un `.cdg` sintético a
 4. Empaquetado: falta correr `scripts/start-kiosk.ps1` de punta a punta y, si se quiere, registrar el arranque automático (ver sección de abajo — son cambios de sistema, no se hacen sin pedirlo explícitamente).
 5. ~~Migración del catálogo legado~~ — **hecha** (2026-07-31, ver sección arriba): 7005 canciones extraídas a `repertorio/` e importadas con letra sincronizada.
 6. **Fase 2 del plan original — dejada para el final a pedido del usuario:** celular + QR + sala en vivo, para que los invitados pidan canción/reaccionen/voten desde su propio teléfono en vez de que el operador cargue todo desde la única pantalla. La cola y los puntajes de esta sesión ya están modelados de forma que Fase 2 podría sumarse encima (un invitado agregándose a la misma cola) en vez de ser un sistema aparte — pero eso es diseño a futuro, no algo ya decidido.
+7. **Modularizar features pesadas/opcionales, instalables aparte** (para cuando se trabaje en refinar/optimizar la app). Medido en la sesión 2026-08-20: `pipeline/.venv` + `pipeline/models/` pesan **~8.5GB** (torch+CUDA 4.5GB, librerías `nvidia-*-cu12` 2.3GB, onnxruntime-gpu 343MB, opencv 138MB, mediapipe 44MB, whisperx 17MB, demucs+deps ~20MB, `inswapper_128.onnx` 530MB) — el 92% del peso total de la app sin canciones (~8.7GB). Ese peso es un requisito de instalación fijo hoy, aunque la PC no tenga GPU NVIDIA — caso en el que el face swap del Fun Box ni siquiera es usable (CPU: 13+ min por clip, ver gotcha de `CLAUDE.md`). La idea: tratar "reconocimiento facial / face swap con IA" (y potencialmente Demucs, que también es pesado y opcional) como una feature que se descarga e instala aparte y se activa/desactiva según haga falta — no siempre incluida — así una PC sin GPU no baja ni instala nada que no va a poder usar. El resto del stack Python (WhisperX para sincronía de letra) sí puede correr en CPU (más lento, pero usable) y podría quedar como base obligatoria. Relevante también si algún día se empaqueta esto como app instalable multiplataforma (Tauri, sin depender de Windows): el pipeline Python+CUDA es la única pieza que no porta igual a todos lados (no hay CUDA en macOS), modularizarlo la desacopla de esa decisión en vez de forzar "todo o nada".
 
 ### Empaquetado (§6/§11 de `DECISIONES-STACK.md`) — en progreso esta sesión
 
