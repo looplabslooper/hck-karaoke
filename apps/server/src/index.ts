@@ -63,6 +63,8 @@ import {
   createTemplateMeta,
   updateTemplateMeta,
   deleteTemplateMeta,
+  getFaceSwapEnabled,
+  setFaceSwapEnabled,
 } from './db/queries.js'
 import type { SongSortColumn } from './db/queries.js'
 import { runAlignment } from './sync/align.js'
@@ -209,15 +211,30 @@ app.get('/api/sessions/current/faceswap-status', (_req, res) => {
   if (!session) return res.json({})
   const singers = listSessionSingers(session.id)
   const templates = listTemplates(templatesDir).filter((t) => t.kind === 'faceswap')
+  const enabled = getFaceSwapEnabled()
   const status: Record<string, Record<string, string>> = {}
   for (const singer of singers) {
     if (!singer.photoUrl) continue
     status[singer.id] = {}
     for (const t of templates) {
-      status[singer.id][t.id] = getFaceSwapStatus(faceSwapOutPath(session.id, singer.id, t.id), singer.id, t.id)
+      // Deshabilitado (sin GPU detectada al instalar, ver setup.bat): nunca
+      // se dispara el render, así que nunca pasaría de 'pending' — se reporta
+      // aparte para que la UI no diga "preparando" de forma indefinida.
+      status[singer.id][t.id] = enabled
+        ? getFaceSwapStatus(faceSwapOutPath(session.id, singer.id, t.id), singer.id, t.id)
+        : 'disabled'
     }
   }
   res.json(status)
+})
+
+app.get('/api/settings/faceswap-enabled', (_req, res) => {
+  res.json({ enabled: getFaceSwapEnabled() })
+})
+
+app.post('/api/settings/faceswap-enabled', (req, res) => {
+  setFaceSwapEnabled(Boolean(req.body.enabled))
+  res.json({ enabled: getFaceSwapEnabled() })
 })
 
 // Si ya había una sesión activa, la termina (borra DB + fotos en disco)
@@ -315,6 +332,7 @@ function faceSwapOutPath(sessionId: string, singerId: string, templateId: string
  * templates `faceswap` que ya existen — se llama apenas se registra un
  * cantante con foto, para que esté listo antes de que le toque cantar. */
 function triggerFaceSwapRendersForSinger(singer: Singer): void {
+  if (!getFaceSwapEnabled()) return
   const session = getActiveSession()
   if (!session || !singer.photoUrl) return
   const photoPath = singerPhotoAbsPath(singer.photoUrl)
@@ -338,6 +356,7 @@ function triggerFaceSwapRendersForSinger(singer: Singer): void {
  * dispara contra todos los cantantes ya cargados con foto — así no hace
  * falta re-registrar a nadie para que el template nuevo esté disponible. */
 function triggerFaceSwapRendersForTemplate(templateId: string): void {
+  if (!getFaceSwapEnabled()) return
   const session = getActiveSession()
   if (!session) return
   const dir = path.join(templatesDir, templateId)
@@ -391,6 +410,13 @@ app.post('/api/templates', templateUpload.single('video'), async (req, res) => {
   if (!req.file) {
     fs.rmSync(dir, { recursive: true, force: true })
     return res.status(400).json({ error: 'falta el archivo de video' })
+  }
+
+  if (kind === 'faceswap' && !getFaceSwapEnabled()) {
+    fs.rmSync(dir, { recursive: true, force: true })
+    return res.status(400).json({
+      error: 'Face swap deshabilitado en esta instalación (no se detectó GPU NVIDIA al instalar) — se puede activar igual desde Fun Box, pero sin GPU cada video tarda 13+ minutos en procesarse.',
+    })
   }
 
   const rawName = typeof req.body.name === 'string' ? req.body.name.trim() : ''

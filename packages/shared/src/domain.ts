@@ -130,7 +130,7 @@ export type Template =
 /** Estado de render de un clip cantante+template `faceswap` (ver
  * GET /api/sessions/current/faceswap-status) — `ready` es el único estado en
  * que hay algo para reproducir; los demás dejan el hotkey deshabilitado. */
-export type TemplateRenderStatus = 'pending' | 'ready' | 'failed'
+export type TemplateRenderStatus = 'pending' | 'ready' | 'failed' | 'disabled'
 
 /** Lista curada de antemano, para empujar varias canciones a la cola de una vez. */
 export interface Playlist {

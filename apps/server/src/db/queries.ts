@@ -259,6 +259,24 @@ export function setBackgroundVideo(relativePath: string): void {
     .run()
 }
 
+/** Sin fila todavía = habilitado (instalaciones viejas, o la fila nunca se
+ * tocó porque el instalador detectó GPU NVIDIA). Se pone en '0' desde el
+ * instalador (ver scripts/setup.bat) cuando no se detecta GPU — face swap
+ * es la única pieza del pipeline Python que de verdad la necesita, ver
+ * gotcha en CLAUDE.md. También editable después desde Fun Box en Studio. */
+export function getFaceSwapEnabled(): boolean {
+  const row = db.select().from(settings).where(eq(settings.key, 'faceSwapEnabled')).get()
+  return row ? row.value === '1' : true
+}
+
+export function setFaceSwapEnabled(enabled: boolean): void {
+  const value = enabled ? '1' : '0'
+  db.insert(settings)
+    .values({ key: 'faceSwapEnabled', value })
+    .onConflictDoUpdate({ target: settings.key, set: { value } })
+    .run()
+}
+
 // --- portadas de categoría --------------------------------------------------
 
 function categoryImageKey(categoryId: CategoryId): string {

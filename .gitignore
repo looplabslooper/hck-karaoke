@@ -34,6 +34,8 @@ library/_categories/
 # transform.json por carpeta) — el operador la puebla a mano, ver
 # .claude/agents/director-escenas.md
 /templates/
+# Empaquetado de Fun Box para mover a otra PC, ver scripts/export-templates.ps1
+/templates-export.zip
 
 # base de datos local (se recrea con migraciones + seed)
 /data/

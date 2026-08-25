@@ -326,6 +326,10 @@ export function App() {
   // GET /api/sessions/current/faceswap-status). Determina qué hotkeys del
   // panel en vivo están habilitados.
   const [faceswapStatus, setFaceswapStatus] = useState<Record<string, Record<string, TemplateRenderStatus>>>({})
+  // Puesto en falso por el instalador (scripts/setup.bat) cuando no detectó
+  // GPU NVIDIA — ver getFaceSwapEnabled en el server. Empieza en `true` para
+  // no parpadear "deshabilitado" mientras llega la respuesta del fetch.
+  const [faceSwapEnabled, setFaceSwapEnabledState] = useState(true)
 
   // Cola en vivo + puntajes
   const [queue, setQueue] = useState<QueueItem[]>([])
@@ -576,6 +580,16 @@ export function App() {
     setTemplates(await res.json())
   }
 
+  async function handleEnableFaceSwap() {
+    const res = await fetch('/api/settings/faceswap-enabled', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: true }),
+    })
+    const body: { enabled: boolean } = await res.json()
+    setFaceSwapEnabledState(body.enabled)
+  }
+
   async function refreshFaceswapStatus() {
     const res = await fetch('/api/sessions/current/faceswap-status')
     setFaceswapStatus(await res.json())
@@ -790,6 +804,7 @@ export function App() {
     refreshPlaylists()
     refreshSession()
     refreshTemplates()
+    fetch('/api/settings/faceswap-enabled').then((r) => r.json()).then((d) => setFaceSwapEnabledState(d.enabled))
     refreshBanners()
     refreshCategoryImages()
     refreshCameraDevices()
@@ -2633,9 +2648,11 @@ export function App() {
                     const title = !kioskMode
                       ? 'Ir a Fun Box'
                       : notReady
-                        ? status === 'failed'
-                          ? 'No se pudo generar el swap para este cantante'
-                          : 'Preparando el swap para este cantante…'
+                        ? status === 'disabled'
+                          ? 'Face swap deshabilitado en esta instalación (sin GPU NVIDIA) — activalo desde Fun Box'
+                          : status === 'failed'
+                            ? 'No se pudo generar el swap para este cantante'
+                            : 'Preparando el swap para este cantante…'
                         : undefined
                     return (
                       <button
@@ -2664,7 +2681,7 @@ export function App() {
                             className="hck-tag"
                             style={{ position: 'absolute', right: '8px', bottom: '8px', zIndex: 2, background: status === 'failed' ? '#7F1D1D' : 'var(--hck-surface-3)' }}
                           >
-                            {status === 'failed' ? 'Error' : 'Preparando…'}
+                            {status === 'disabled' ? 'Sin GPU' : status === 'failed' ? 'Error' : 'Preparando…'}
                           </span>
                         )}
                       </button>
@@ -3037,6 +3054,8 @@ export function App() {
           <FunBox
             templates={templates}
             faceswapStatus={faceswapStatus}
+            faceSwapEnabled={faceSwapEnabled}
+            onEnableFaceSwap={handleEnableFaceSwap}
             singersWithPhoto={singersWithPhoto}
             testSingerId={testSingerId}
             onSetTestSingerId={setTestSingerId}
@@ -3755,6 +3774,7 @@ export function App() {
                   key={i}
                   type="button"
                   disabled={disabled}
+                  title={status === 'disabled' ? 'Face swap deshabilitado en esta instalación (sin GPU NVIDIA) — activalo desde Fun Box' : undefined}
                   onClick={() => {
                     if (kioskMode) triggerFaceSwap(t)
                     else { setPage('funbox'); setFxOpen(false) }

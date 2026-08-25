@@ -9,8 +9,23 @@ dependencies = [
     "torchaudio>=2.6.0",
     "whisperx>=3.4.5",
     "demucs>=4.0.1",
+    # opencv/mediapipe también los usa track_color.py (sticker por color) —
+    # ese tracking corre bien en CPU, no es exclusivo de face swap, por eso
+    # quedan acá y no en el extra "faceswap" de abajo.
     "opencv-python>=5.0.0.93",
     "mediapipe>=1.0.0",
+]
+
+# Face swap ("Cara en el escenario" con IA real, no el sticker por color) es
+# la única pieza del pipeline que de verdad *necesita* GPU NVIDIA para ser
+# viable — probado: un clip de 48 cuadros no termina ni después de 13 minutos
+# en CPU (ver gotcha en CLAUDE.md). Separado como extra para que una PC sin
+# GPU no baje estos ~1GB+ de dependencias CUDA-específicas sin poder usarlos
+# nunca — `uv sync` (sin extra) alcanza para sincronía de letra (WhisperX,
+# anda en CPU aunque más lento) y para el sticker por color. Instalación
+# completa: `uv sync --extra faceswap`.
+[project.optional-dependencies]
+faceswap = [
     "insightface>=0.7.3",
     # Pineado a 1.22.0 (no ">=") a propósito: es la última serie que todavía
     # pide sus dependencias CUDA como "nvidia-*-cu12" (ver extras [cuda,cudnn]

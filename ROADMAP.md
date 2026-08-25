@@ -168,6 +168,41 @@ Probado de punta a punta contra el servidor real: generé un `.cdg` sintético a
 - Registrar la Tarea Programada de arranque automático — el comando exacto (`Register-ScheduledTask ...`) queda documentado al final de `scripts/start-kiosk.ps1`, pero registrarlo de verdad es una acción sobre la cuenta de Windows del usuario, no algo para hacer sin pedir permiso primero.
 - Confirmar que la regla de firewall + perfil de red "Privada" están bien si alguna vez se prueba desde un celular en la misma LAN (no es necesario todavía — Fase 2 no empezó).
 
+### Instalación en una PC nueva sin GPU + mover Fun Box entre instalaciones (sesión 2026-08-25)
+
+Motivado por dos pedidos concretos: instalar en una PC con riesgo de no tener placa de video, y
+después mover todo a una PC distinta que sí tiene GPU (RTX) llevándose los templates de Fun Box ya
+armados.
+
+- **`pipeline/pyproject.toml` separado en dos grupos.** `insightface`/`onnxruntime-gpu[cuda,cudnn]`/
+  `nvidia-cublas-cu12` (las únicas piezas que de verdad necesitan GPU NVIDIA — el resto, WhisperX/
+  Demucs/sticker por color, anda en CPU) pasaron a `[project.optional-dependencies] faceswap`. Antes,
+  `uv sync` bajaba esas ~1GB+ de dependencias CUDA aunque la PC no tuviera GPU y nunca pudiera
+  usarlas. Instalación base: `uv sync`. Con face swap: `uv sync --extra faceswap`. Probado de punta a
+  punta en esta PC (tiene GPU): `uv sync` sin extra desinstaló los 18 paquetes CUDA-específicos,
+  `uv sync --extra faceswap` los volvió a instalar — ambos caminos resuelven y funcionan.
+- **`scripts/setup.bat` ahora detecta GPU NVIDIA** (`Get-CimInstance Win32_VideoController`, probado
+  en cmd.exe real) antes de instalar el pipeline. Si no encuentra una, avisa (con los números reales:
+  WhisperX anda en CPU, face swap no — 13+ min por clip) y deja elegir: instalar face swap igual,
+  instalar sin él, o no instalar el pipeline por ahora — ninguna opción bloquea el resto de la
+  instalación (Node/pnpm/DB siguen su curso aparte).
+- **Deshabilitar face swap tiene efecto real en la app**, no es solo saltear la instalación:
+  `settings.faceSwapEnabled` (server) bloquea subir templates `faceswap` nuevos y los renders, con un
+  mensaje claro en vez de fallar en silencio contra un pipeline que no está instalado. El admin muestra
+  "deshabilitado (sin GPU)" en vez de "preparando…" indefinido, con un botón "Habilitar igual" en Fun
+  Box por si después consiguen GPU. `TemplateRenderStatus` ganó el valor `'disabled'` (`packages/shared`).
+- **`scripts/export-templates.ps1` / `import-templates.ps1`** — `templates/` (videos + mapeo),
+  `template_meta` (nombre/hotkey, vive en la DB, no en el filesystem — dos scripts nuevos,
+  `apps/server/src/db/export-template-meta.ts`/`import-template-meta.ts`) y
+  `pipeline/models/inswapper_128.onnx` no viajan con git (contenido pesado, ver `.gitignore`) — estos
+  dos scripts los empaquetan en un `.zip` para copiar a mano (USB/red/nube) entre instalaciones.
+  `setup.bat` detecta `templates-export.zip` junto al repo y ofrece importarlo solo al final. Probado
+  de punta a punta en esta PC: export (506MB con el modelo incluido) → import sobre la misma
+  instalación (roundtrip) → los 6 templates y sus hotkeys (1/2/3 asignados, sin duplicados) quedaron
+  intactos, el modelo se copió íntegro.
+- `README.md` (nuevo, antes no existía) documenta todo esto como guía real para alguien que clona el
+  repo por primera vez — instalación, pipeline con/sin GPU, y cómo mover Fun Box entre PCs.
+
 ## Decisiones ya tomadas (no volver a discutir sin que lo pida el usuario)
 Detalle completo en `DECISIONES-STACK.md`. Resumen rápido:
 - Node **22.23.1** fijado en `.nvmrc` — versiones más nuevas no tenían binario precompilado de `better-sqlite3` en este entorno.

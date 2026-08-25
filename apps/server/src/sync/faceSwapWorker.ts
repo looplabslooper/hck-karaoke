@@ -101,7 +101,11 @@ function ensureWorker(): Promise<void> {
 
   shuttingDown = false
   const uvBin = resolveUvBinary()
-  const child = spawn(uvBin, ['run', 'python', 'faceswap_worker.py'], { cwd: pipelineDir })
+  // --extra faceswap: insightface/onnxruntime-gpu quedaron en un extra
+  // aparte de pyproject.toml (no en las dependencias base) para que una
+  // instalación sin GPU no los baje — este worker es el único consumidor,
+  // así que siempre pide el extra al arrancar.
+  const child = spawn(uvBin, ['run', '--extra', 'faceswap', 'python', 'faceswap_worker.py'], { cwd: pipelineDir })
   worker = child
 
   let stderrTail = ''

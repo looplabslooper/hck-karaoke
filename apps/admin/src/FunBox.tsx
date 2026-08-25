@@ -5,6 +5,8 @@ import { Icon } from './icons'
 interface Props {
   templates: Template[]
   faceswapStatus: Record<string, Record<string, TemplateRenderStatus>>
+  faceSwapEnabled: boolean
+  onEnableFaceSwap: () => void
   singersWithPhoto: (Singer & { photoUrl: string })[]
   testSingerId: string | null
   onSetTestSingerId: (id: string) => void
@@ -28,6 +30,8 @@ const HOTKEYS = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const
 export function FunBox({
   templates,
   faceswapStatus,
+  faceSwapEnabled,
+  onEnableFaceSwap,
   singersWithPhoto,
   testSingerId,
   onSetTestSingerId,
@@ -65,11 +69,30 @@ export function FunBox({
             <button type="button" className={`hck-chip${kind === 'sticker' ? ' hck-chip-on' : ''}`} onClick={() => setKind('sticker')}>
               Sticker por color
             </button>
-            <button type="button" className={`hck-chip${kind === 'faceswap' ? ' hck-chip-on' : ''}`} onClick={() => setKind('faceswap')}>
+            <button
+              type="button"
+              className={`hck-chip${kind === 'faceswap' ? ' hck-chip-on' : ''}`}
+              disabled={!faceSwapEnabled}
+              title={faceSwapEnabled ? undefined : 'Deshabilitado en esta instalación (sin GPU NVIDIA)'}
+              onClick={() => setKind('faceswap')}
+            >
               Face swap con IA
             </button>
           </div>
         </div>
+
+        {!faceSwapEnabled && (
+          <div className="hck-card" style={{ background: 'var(--hck-surface-2)', gap: '8px', padding: '14px 16px' }}>
+            <p className="hck-muted" style={{ fontSize: '13.5px' }}>
+              Face swap deshabilitado en esta instalación — no se detectó una placa NVIDIA al
+              instalar. Sin GPU, cada video tarda 13+ minutos en procesarse (probado), así que no
+              es usable en vivo. El sticker por color sigue andando normal, no necesita GPU.
+            </p>
+            <button type="button" className="hck-btn hck-btn-secondary" style={{ alignSelf: 'flex-start' }} onClick={onEnableFaceSwap}>
+              Habilitar igual
+            </button>
+          </div>
+        )}
 
         <div className="hck-field">
           <label>Nombre (opcional)</label>
@@ -152,9 +175,11 @@ export function FunBox({
             singersWithPhoto.length === 0
               ? 'Necesitás un cantante con foto para probar'
               : testNotReady
-                ? testStatus === 'failed'
-                  ? 'No se pudo generar el swap para este cantante'
-                  : 'Preparando el swap para este cantante…'
+                ? testStatus === 'disabled'
+                  ? 'Face swap deshabilitado en esta instalación (sin GPU NVIDIA)'
+                  : testStatus === 'failed'
+                    ? 'No se pudo generar el swap para este cantante'
+                    : 'Preparando el swap para este cantante…'
                 : undefined
           return (
             <TemplateCard
