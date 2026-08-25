@@ -4,6 +4,25 @@ Software para convertir una PC (Windows) en un kiosco de karaoke moderno: catál
 letra sincronizada, cola de cantantes, puntajes, animación de cara en el escenario ("Fun Box") y modo
 pantalla completa para el público.
 
+## Conseguir el código
+
+**Opción A — con Git** (recomendada si más adelante vas a querer traer actualizaciones con `git pull`):
+1. Instalar Git: https://git-scm.com/download/win (el instalador arranca la descarga solo; las opciones
+   por default están bien). Alternativa si ya usás winget: `winget install --id Git.Git -e --source winget`.
+2. Verificar: `git --version` en una terminal nueva.
+3. `git clone https://github.com/looplabslooper/hck-karaoke.git`
+
+**Opción B — sin instalar nada, bajando el .zip** (más simple para una instalación única que no vas a
+actualizar seguido):
+1. Ir a https://github.com/looplabslooper/hck-karaoke → botón verde **Code** → **Download ZIP** (o
+   directo: https://github.com/looplabslooper/hck-karaoke/archive/refs/heads/main.zip).
+2. Descomprimir donde quieras tener el proyecto.
+
+La diferencia real: con el .zip no queda un repo git de verdad, así que para traer cambios de código
+más adelante hay que volver a descargar el .zip entero y pisar los archivos (no afecta a `data/`,
+`library/`, `templates/` ni `pipeline/.venv` — esos no vienen en el .zip, igual que con `git clone`,
+porque no están versionados).
+
 ## Requisitos: instalar Node 22.x
 
 El repo fija **Node 22.23.1** en `.nvmrc`, pero `scripts\setup.bat` solo valida el major (22.x) — no
