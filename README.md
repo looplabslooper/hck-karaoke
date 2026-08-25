@@ -4,6 +4,26 @@ Software para convertir una PC (Windows) en un kiosco de karaoke moderno: catál
 letra sincronizada, cola de cantantes, puntajes, animación de cara en el escenario ("Fun Box") y modo
 pantalla completa para el público.
 
+## Requisitos: instalar Node 22.x
+
+El repo fija **Node 22.23.1** en `.nvmrc`, pero `scripts\setup.bat` solo valida el major (22.x) — no
+hace falta ese patch exacto. Node más nuevo (24.x) no tiene binario precompilado de `better-sqlite3`
+en este stack y forzaría a compilarlo a mano con Visual Studio Build Tools, por eso el major importa.
+
+**Opción simple** (recomendada para una PC dedicada al kiosco):
+1. Ir a https://nodejs.org/en/download, elegir la versión **22.x LTS**, Windows Installer (.msi), x64.
+2. Correr el instalador (next → next → finish, ya incluye npm).
+3. Abrir una terminal nueva y verificar: `node -v` → tiene que decir `v22.x.x`.
+
+**Opción alternativa** (si esa PC ya tiene o va a necesitar otras versiones de Node para otra cosa):
+1. Instalar [nvm-windows](https://github.com/coreybutler/nvm-windows/releases) (el `nvm-setup.exe` del
+   último release).
+2. `nvm install 22.23.1`
+3. `nvm use 22.23.1`
+
+Con cualquiera de las dos, seguí con el arranque rápido de abajo — `setup.bat` revisa la versión solo y
+corta con un mensaje claro si detecta algo distinto de 22.x.
+
 ## Arranque rápido
 
 ```
@@ -12,9 +32,7 @@ scripts\setup.bat
 
 Doble click también sirve — es un `.bat`, abre su propia consola. Instala dependencias, crea la base
 de datos si no existe (sin canciones), instala el pipeline de Python (letra + Fun Box, detectando si
-hay GPU NVIDIA — ver más abajo), y al final ofrece arrancar en modo desarrollo. Requiere **Node 22.x**
-ya instalado (ver `.nvmrc`) — si falta o es otra versión major, el script avisa y corta antes de tocar
-nada.
+hay GPU NVIDIA — ver más abajo), y al final ofrece arrancar en modo desarrollo.
 
 Si copiaste un `templates-export.zip` junto al repo (ver "Mover Fun Box a otra instalación" más abajo),
 el script lo detecta solo y ofrece importarlo al final.
